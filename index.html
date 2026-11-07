@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fără logo — laboratorul de amprentă a brandului</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">Fără&nbsp;logo<span>laboratorul de amprentă a brandului</span></div>
+    <nav>
+      <button data-tab="setup" class="active">1 · Set de date</button>
+      <button data-tab="analyze">2 · Analiză</button>
+      <button data-tab="history">3 · Rezultate</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- 1. Set de date -->
+    <section id="tab-setup" class="tab active">
+      <div class="grid2">
+        <div class="card">
+          <h2>Categorie și branduri</h2>
+          <label>Categorie <input id="category" value="bere" /></label>
+          <form id="brand-form" class="row">
+            <input id="brand-name" placeholder="Nume brand (ex. Ursus)" required />
+            <button>Adaugă</button>
+          </form>
+          <ul id="brand-list" class="chips"></ul>
+        </div>
+        <div class="card">
+          <h2>Încarcă reclame</h2>
+          <form id="ad-form">
+            <label>Brand <select id="ad-brand" required></select></label>
+            <label>Rol
+              <select id="ad-role">
+                <option value="memory">Memorie — reclamă nemascată, etichetată (3–5 per brand)</option>
+                <option value="test">Test — reclamă de analizat</option>
+              </select>
+            </label>
+            <label>Titlu <input id="ad-title" placeholder="opțional" /></label>
+            <label>Imagini (PNG, JPG, WebP) <input id="ad-files" type="file" accept="image/png,image/jpeg,image/webp" multiple required /></label>
+            <button>Încarcă</button>
+            <p id="ad-status" class="muted"></p>
+          </form>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Reclame în categorie</h2>
+        <div id="ad-gallery" class="gallery"></div>
+      </div>
+    </section>
+
+    <!-- 2. Analiză -->
+    <section id="tab-analyze" class="tab">
+      <div class="card">
+        <h2>Alege reclama de test</h2>
+        <div id="test-gallery" class="gallery small"></div>
+      </div>
+      <div id="editor" class="card hidden">
+        <h2>Mascare și elemente</h2>
+        <p class="muted">Trage dreptunghiuri pe imagine. <b>Logo</b> = zone acoperite cu gri plat în toate variantele.
+          Fiecare <b>element</b> devine o variantă de ablație (zona e umplută cu culoarea din jur).
+          Bifează „culoare” pentru un element cromatic: varianta rotește nuanța întregii imagini.</p>
+        <div class="editor-wrap">
+          <canvas id="canvas"></canvas>
+          <div class="side">
+            <div class="row">
+              <input id="el-name" placeholder="Element nou (ex. mascota)" />
+              <label class="inline"><input type="checkbox" id="el-hue" /> culoare</label>
+              <button id="el-add" type="button">+</button>
+            </div>
+            <ul id="layers" class="layers"></ul>
+            <hr />
+            <label>Variante generate (deja mascate, opțional)
+              <input id="gen-files" type="file" accept="image/png,image/jpeg,image/webp" multiple /></label>
+            <label>Evaluări per variantă <input id="n-evals" type="number" min="1" max="30" value="10" /></label>
+            <label class="inline"><input type="checkbox" id="use-memory" checked /> memorie însămânțată</label>
+            <label class="inline"><input type="checkbox" id="control" /> + control fără memorie (doar bază)</label>
+            <button id="run" class="primary" type="button">Rulează panelul orb</button>
+            <div id="progress" class="muted"></div>
+          </div>
+        </div>
+      </div>
+      <div id="result" class="card hidden"></div>
+    </section>
+
+    <!-- 3. Rezultate -->
+    <section id="tab-history" class="tab">
+      <div class="card">
+        <h2>Analize</h2>
+        <div id="history-list"></div>
+      </div>
+      <div id="history-detail" class="card hidden"></div>
+    </section>
+  </main>
+
+  <footer class="muted">Panel AI = pre-test instant, nu înlocuiește un panel uman.</footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
