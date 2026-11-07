@@ -1,10 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071225";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071240";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071225";
+const APP_VERSION = "202611071240";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -63,7 +63,7 @@ document.addEventListener("mousemove", (e) => {
   tip.style.left = `${x}px`; tip.style.top = `${e.clientY + 14}px`;
 });
 
-const DX = { asset_puternic: "Asset puternic", tradator: "Element trădător", decor: "Decor", neutru: "Neutru" };
+const DX = { asset_puternic: "Asset puternic", tradator: "Element trădător", decor: "Decor", neutru: "Neutru", neconcludent: "Neconcludent" };
 
 let brands = [];
 let ads = [];
@@ -398,6 +398,7 @@ async function showResult(el, analysisId, controlId) {
   if (a.status === "error") { el.innerHTML = `<h2>Analiză eșuată</h2><p class="err">${esc(a.error)}</p>`; return; }
   if (!s) { el.innerHTML = `<h2>Analiză în curs</h2><p class="muted">Status: ${esc(a.status)}</p>`; return; }
 
+  if (s.version === 2) { el.innerHTML = statsView({ a, s, vs, imp, target, ctrl }); return; }
   el.innerHTML = `
     <h2>${esc(target)} — ${esc(a.ads.title ?? "reclamă")}</h2>
     <div class="grid2">
@@ -497,6 +498,127 @@ function charts({ a, vs, imp, target, s }) {
     html += `<p class="muted">Similaritatea nu s-a putut calcula: ${esc(sim.error)}</p>`;
   }
   return html;
+}
+
+// ---------- raport statistic (versiunea 2) ----------
+const pctCI = (ci) => (ci && Number.isFinite(ci[0]) ? `[${Math.round(ci[0] * 100)}%, ${Math.round(ci[1] * 100)}%]` : "—");
+const ppCI = (ci) => (ci && Number.isFinite(ci[0]) ? `[${(ci[0] * 100).toFixed(0)}, ${(ci[1] * 100).toFixed(0)}] pp` : "—");
+const fmtP = (p) => (!Number.isFinite(p) ? "—" : p < 0.001 ? "< .001" : p.toFixed(3).replace(/^0/, ""));
+const starsOf = (p) => (!Number.isFinite(p) ? "" : p < 0.001 ? "***" : p < 0.01 ? "**" : p < 0.05 ? "*" : "ns");
+const sgn = (x, d = 2) => `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(d)}`;
+const REPORT_SECTIONS = [["sinteza", "Sinteză"], ["variabile", "Variabile analizate"], ["metoda", "Metodă"],
+  ["rezultate", "Rezultate"], ["verificari", "Verificări de calitate"], ["limite", "Limite"], ["recomandare", "Recomandare"]];
+
+function reportHtml(report) {
+  let r = null;
+  try { r = JSON.parse(report); } catch {}
+  if (!r || typeof r !== "object") return `<div class="report">${esc(report)}</div>`;
+  return `<div class="report-sections">${REPORT_SECTIONS.filter(([k]) => r[k]).map(([k, t]) =>
+    `<section class="rs ${k}"><h4>${t}</h4><p>${esc(r[k])}</p></section>`).join("")}</div>`;
+}
+
+function statsView({ a, s, vs, imp, target, ctrl }) {
+  const P = s.profile, col = brandColors([target, ...Object.keys(s.confusion ?? {}), "nu știu"]);
+  const alerts = (s.alerts ?? []).map((x) => `<div class="alert ${x.level}"><b>${x.level === "critic" ? "Critic" : x.level === "atentie" ? "Atenție" : "OK"}</b> ${esc(x.text)}</div>`).join("");
+  const chanceTxt = P.chance != null ? `${Math.round(P.chance * 100)}%` : "—";
+
+  // Grafic 1: atribuirea pe fiecare variantă, punct = medie, bară = IC 95%, linie = nivelul șansei
+  const rows = s.variants.map((v) => {
+    const lo = v.ci?.[0] ?? v.mean, hi = v.ci?.[1] ?? v.mean;
+    const label = v.kind === "base" ? "Bază (logo mascat)" : v.kind === "ablation" ? `Fără: ${v.element}` : `Generată: ${v.element}`;
+    return `<div class="ci-row"><span class="lbl" title="${esc(label)}">${esc(label)}</span>
+      <div class="ci-track" data-tip="<b>${esc(label)}</b><br>M = ${pct(v.mean)}, IC 95% ${pctCI(v.ci)}<br>n = ${v.n} evaluări">
+        ${P.chance != null ? `<span class="chance" style="left:${P.chance * 100}%"></span>` : ""}
+        <span class="whisk" style="left:${lo * 100}%;width:${Math.max(0.4, (hi - lo) * 100)}%"></span>
+        <span class="pt ${v.kind}" style="left:${v.mean * 100}%"></span></div>
+      <span class="val">${pct(v.mean)}</span></div>`;
+  }).join("");
+  const chart1 = `<div class="viz"><h3>Atribuirea corectă pe fiecare variantă</h3>
+    <p class="sub">Punct = media panelului, bară = interval de încredere 95% (bootstrap). Linia punctată = nivelul șansei (${chanceTxt}, ghicit la întâmplare între ${P.candidates} branduri).</p>
+    ${rows}<div class="axis"><span></span><div class="ticks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><span></span></div></div>`;
+
+  // Grafic 2: forest plot pentru Δ (bază − fără element), cu IC 95% și semnificație după Holm
+  let chart2 = "";
+  if (imp.length) {
+    const ext = Math.max(0.3, ...imp.flatMap((i) => [Math.abs(i.stats?.ci?.[0] ?? i.delta), Math.abs(i.stats?.ci?.[1] ?? i.delta)])) * 1.08;
+    const xp = (d) => 50 + (d / ext) * 50;
+    chart2 = `<div class="viz"><h3>Ce element poartă brandul — efectul eliminării</h3>
+      <p class="sub">Δ = atribuirea de bază minus atribuirea fără element. Spre dreapta: elementul ajută recunoașterea. Bară = IC 95%; stelele = semnificație după corecția Holm (* p&lt;.05, ** p&lt;.01, *** p&lt;.001, ns = nesemnificativ). Linia punctată = pragul de asset (Δ ${s.thresholds.asset}).</p>
+      ${imp.map((i) => {
+        const st = i.stats ?? {}, ci = st.ci ?? [i.delta, i.delta];
+        const tip = `<b>${esc(i.element)}</b><br>Δ = ${sgn(i.delta)} (${Math.round(i.delta * 100)} pp), IC 95% ${ppCI(ci)}<br>p (Holm) ${fmtP(st.p_holm)}, Hedges g = ${Number.isFinite(st.g) ? st.g.toFixed(2) : "—"} (${esc(st.effect ?? "")})` +
+          (st.top_pull > 0.01 ? `<br>Atrage spre ${esc(st.top_competitor)}: +${pct(st.top_pull)}, p (Holm) ${fmtP(st.p_pull_holm)}` : "");
+        return `<div class="frow"><span class="lbl">${esc(i.element)}</span>
+          <div class="ftrack" data-tip="${tip}"><span class="zero"></span><span class="thr" style="left:${xp(s.thresholds.asset)}%"></span>
+            <span class="fci ${i.diagnosis}" style="left:${xp(Math.min(ci[0], ci[1]))}%;width:${Math.max(0.5, Math.abs(xp(ci[1]) - xp(ci[0])))}%"></span>
+            <span class="fpt ${i.diagnosis}" style="left:${xp(i.delta)}%"></span></div>
+          <span class="fval">${sgn(i.delta)} <b>${starsOf(st.p_holm)}</b> <span class="dx ${i.diagnosis}">${DX[i.diagnosis]}</span></span></div>`;
+      }).join("")}
+      <div class="axis f"><span></span><div class="ticks"><span>−${ext.toFixed(2)}</span><span>0</span><span>+${ext.toFixed(2)}</span></div><span></span></div></div>`;
+  }
+
+  // Tabel: rezultate per element (format APA)
+  const table = imp.length ? `<div class="viz"><h3>Tabelul 1. Efectul fiecărui element asupra atribuirii</h3>
+    <div class="tscroll"><table class="apa"><thead><tr><th>Element</th><th>M fără element</th><th>Δ</th><th>IC 95%</th><th>p (Holm)</th><th>Hedges g</th><th>Confuzie principală</th><th>Diagnostic</th></tr></thead><tbody>
+    ${imp.map((i) => { const st = i.stats ?? {}; return `<tr><td>${esc(i.element)}</td><td>${pct(st.mean_variant)}</td><td>${sgn(i.delta)}</td>
+      <td>${ppCI(st.ci)}</td><td>${fmtP(st.p_holm)} ${starsOf(st.p_holm)}</td><td>${Number.isFinite(st.g) ? st.g.toFixed(2) : "—"} <span class="muted">${esc(st.effect ?? "")}</span></td>
+      <td>${st.top_pull > 0.01 ? `${esc(st.top_competitor)} ${sgn(st.top_pull * 100, 0)} pp` : "—"}</td><td><span class="dx ${i.diagnosis}">${DX[i.diagnosis]}</span></td></tr>`; }).join("")}
+    </tbody></table></div>
+    <p class="note">Notă. n = ${P.n_per_variant} evaluări pe variantă. Δ = M(bază) − M(fără element). IC bootstrap percentile (4000 reeșantionări); p din test de permutare bilateral (5000 permutări), corectat Holm. Asset: Δ &gt; ${s.thresholds.asset} și p &lt; .05; trădător: atrage &gt; ${Math.round(s.thresholds.traitor * 100)} pp spre un concurent, semnificativ; decor: |Δ| &lt; ${s.thresholds.decor} cu IC care include 0; neconcludent: efect vizibil, dar nesemnificativ.</p></div>` : "";
+
+  // Tabel: variabile analizate
+  const elems = imp.map((i) => i.element);
+  const gens = (s.generated ?? []).map((g) => g.element);
+  const vars = [
+    ["Atribuire corectă", "Dependentă", "Continuă, 0–1", `Probabilitatea pe care fiecare evaluator o acordă brandului ${target}`],
+    ["Variantă", "Independentă (manipulată)", "Categorială", `Bază; fără: ${elems.join(", ") || "—"}${gens.length ? `; generate: ${gens.join(", ")}` : ""}`],
+    ["Confuzie cu concurentul", "Dependentă secundară", "Continuă, 0–1", `Probabilitatea acordată fiecărui concurent (${Object.keys(s.confusion ?? {}).join(", ")})`],
+    ["„Nu știu”", "Dependentă secundară", "Continuă, 0–1", "Nesiguranța panelului"],
+    ["Acord top-1", "Descriptivă", "Proporție", "Ponderea evaluatorilor al căror prim vot e brandul corect"],
+    ["Similaritate vizuală", "Descriptivă", "Cosinus, −1–1", "Embedding gemini-embedding-2, reclama mascată vs. reclamele fiecărui brand"],
+    ["Ordinea candidaților", "Control", "Randomizată", "Amestecată la fiecare evaluare (elimină biasul de poziție)"],
+    ["Mascarea logo-ului", "Control", "Constantă", "Același gri plat pe toate variantele"],
+    ["Memorie însămânțată", "Control", s.use_memory ? "Activă" : "Inactivă", s.use_memory ? Object.entries(P.memory_per_brand ?? {}).map(([b, n]) => `${b}: ${n}`).join(", ") : "—"],
+    ["Elemente comune categoriei", "Control", "Excluse", (s.generic_elements ?? []).join(", ") || "—"],
+  ];
+  const varTable = `<div class="viz"><h3>Variabile analizate</h3><div class="tscroll"><table class="apa"><thead><tr><th>Variabilă</th><th>Rol</th><th>Tip</th><th>Măsurare</th></tr></thead>
+    <tbody>${vars.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+
+  // Profilul datelor
+  const t1 = P.top1_agreement ?? {};
+  const prof = [
+    ["Evaluări pe variantă", P.n_per_variant], ["Variante", P.n_variants], ["Voturi totale / invalide", `${P.n_votes} / ${P.n_invalid}`],
+    ["Candidați (fără „nu știu”)", `${P.candidates} · nivelul șansei ${chanceTxt}`],
+    ["Acord top-1 pe bază", t1.n ? `${t1.k}/${t1.n} (${pct(t1.rate)}), IC Wilson ${pctCI(t1.ci)}` : "—"],
+    ["„Nu știu” mediu", pct(P.unknown_mean)], ["Dispersia voturilor (entropie 0–1)", Number.isFinite(P.entropy_mean) ? P.entropy_mean.toFixed(2) : "—"],
+    ["Efect minim detectabil (α=.05, putere .80)", `${Math.round(P.mde * 100)} pp`],
+    ["Text cu numele brandului citit de panel", P.leak?.rate ? `${pct(P.leak.rate)} — ${P.leak.texts.join("; ")}` : "nu"],
+  ];
+  const profTable = `<div class="viz"><h3>Profilul datelor</h3><div class="tscroll"><table class="apa kv"><tbody>
+    ${prof.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(String(v))}</td></tr>`).join("")}</tbody></table></div></div>`;
+
+  const conf = Object.entries(s.confusion ?? {}).sort((x, y) => y[1].mean - x[1].mean)[0];
+  return `
+    <h2>${esc(target)} — ${esc(a.ads.title ?? "reclamă")} <span class="muted">· ${esc(s.category)}</span></h2>
+    ${alerts}
+    <div class="grid2">
+      <div>
+        <div class="big">${pct(s.attribution)} <small>atribuire corectă</small></div>
+        <p class="kpi">IC 95% ${pctCI(s.attribution_ci)} · n = ${P.n_per_variant} · ${s.use_memory ? "cu memorie" : "fără memorie"}</p>
+        <p class="kpi">${s.above_chance == null ? "" : s.above_chance ? `Peste nivelul șansei (${chanceTxt}): întreg intervalul e deasupra.` : `Nu se poate distinge de nivelul șansei (${chanceTxt}).`}</p>
+        ${conf ? `<p class="kpi">Confuzie principală: <b>${esc(conf[0])}</b> ${pct(conf[1].mean)}, IC 95% ${pctCI(conf[1].ci)}</p>` : ""}
+        ${ctrl ? `<p class="kpi">Control fără memorie: ${pct(ctrl.attribution)} — cât din recunoaștere vine din ce știa deja modelul.</p>` : ""}
+      </div>
+      <div><h3 style="margin-top:0">Raportul statisticianului</h3>${reportHtml(a.report)}</div>
+    </div>
+    ${chart1}${chart2}${table}
+    ${charts({ a, vs, imp: [], target, s })}
+    <div class="grid2">${varTable}${profTable}</div>
+    <h3>Variante testate</h3>
+    <div class="variants">${vs.map((v) => { const st = s.variants.find((x) => x.kind === v.kind && x.element === v.element);
+      return `<figure><img src="${imgUrl(v.image_path)}" loading="lazy" alt="" />
+      <figcaption><b>${v.kind === "base" ? "Bază (mascat)" : v.kind === "ablation" ? "Fără: " + esc(v.element) : "Generată: " + esc(v.element)}</b><br>
+      ${pct(st?.mean ?? v.attribution)} · IC ${pctCI(st?.ci)}</figcaption></figure>`; }).join("")}</div>`;
 }
 
 async function loadHistory() {
