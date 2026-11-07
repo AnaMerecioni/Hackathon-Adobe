@@ -102,7 +102,13 @@ export async function rebrand(d: Deps, analysisId: string, briefIn: Brief, wantI
     for (const e of ex ?? []) parts.push({ inline_data: await d.inlineImage(e.image_path) });
   }
 
+  // Ce a funcționat înainte: elementele diagnosticate „asset_puternic” în alte analize ale aceluiași brand
+  const { data: wins } = await d.supabase.from("element_impacts")
+    .select("element,delta,diagnosis,analyses!inner(id,ads!inner(brand_id))")
+    .eq("analyses.ads.brand_id", a.ads.brand_id).in("diagnosis", ["asset_puternic"]).order("delta", { ascending: false }).limit(8);
+  const merged = [...new Map((wins ?? []).map((w: any) => [w.element.toLowerCase(), { element: w.element, delta: w.delta }])).values()];
   const facts = {
+    a_functionat_in_alte_reclame: merged,
     brand: target, categorie: a.category, elemente_comune_categoriei: s.generic_elements ?? [],
     recunoastere: s.attribution, confuzie: s.confusion, concurent_apropiat: rival,
     similaritate: s.similarity ? { per_brand: s.similarity.per_brand, tipic: s.similarity.typical, generica: s.similarity.generic } : null,
@@ -122,8 +128,16 @@ export async function rebrand(d: Deps, analysisId: string, briefIn: Brief, wantI
     "   - „echilibrat”: păstrezi produsul (sticla/ambalajul); schimbi fundalul, scena, compoziția, paleta și textul.",
     "   - „curajos”: schimbi și designul produsului (forma etichetei, culoarea ambalajului, materialul), plus scena, compoziția și textul; " +
       "rămân doar activele cerute de utilizator. Dacă brief-ul cere o ajustare fină, „curajos” rămâne totuși recognoscibil.",
-    "5. Pentru fiecare direcție scrii un text nou de reclamă (headline scurt, în română, fără numele brandului) care exprimă promisiunea brandului.",
-    "6. Pentru fiecare direcție scrii „prompt_imagine” în ENGLEZĂ, 70–130 de cuvinte, ca descriere completă a reclamei noi pentru un generator de imagini: " +
+    "5. Reutilizezi ce a mers: elementele din „a_functionat_in_alte_reclame” și codurile vizuale proprii din exemplele brandului; " +
+      "le recombini diferit în fiecare direcție și scrii în „imprumutat” ce ai preluat. Nu copiezi nimic de la concurent.",
+    "6. Creezi o mascotă originală a brandului (personaj simplu, prietenos, legat de promisiune și categorie, NU o sticlă cu ochi și nu personajul vreunui concurent) " +
+      "și o desenezi ca SVG: viewBox=\"0 0 200 200\", doar forme simple (path, circle, ellipse, rect, polygon), fără text, fără imagini, fără script, fără gradient. " +
+      "Folosești DOAR aceste 4 culori, care vor fi înlocuite cu paleta fiecărei direcții: #111111 (contur și detalii), #AA0000 (culoarea principală), " +
+      "#00AA00 (culoarea secundară), #FFFFFF (alb, ochi și lumini). Maxim 3000 de caractere.",
+    "7. Localizezi în reclama analizată, pe o scară 0–1000 (ymin, xmin, ymax, xmax): produsul principal (cutia strânsă în jurul lui) " +
+      "și fiecare bloc de text mare (headline, slogan), ca să poată fi montat un layout nou fără textul vechi.",
+    "8. Pentru fiecare direcție scrii un text nou de reclamă (headline scurt, în română, fără numele brandului) care exprimă promisiunea brandului.",
+    "9. Pentru fiecare direcție scrii „prompt_imagine” în ENGLEZĂ, 70–130 de cuvinte, ca descriere completă a reclamei noi pentru un generator de imagini: " +
       "descrii precis elementele păstrate exact cum arată în original (formă, culoare, material, poziție), apoi ce e nou (scenă, lumină, paletă cu culorile direcției, " +
       "compoziție, stil fotografic) și headline-ul nou între ghilimele. Fără nume de brand, fără logo-uri.",
     "",
@@ -150,23 +164,36 @@ export async function rebrand(d: Deps, analysisId: string, briefIn: Brief, wantI
         culori: { type: "array", items: { type: "string" }, description: "3–4 culori hex ale direcției, ordonate de la cea mai închisă la cea mai deschisă, diferite de ale concurentului." },
         pastrat: { type: "array", items: { type: "string" }, description: "Ce rămâne neschimbat din reclama originală." },
         schimbat: { type: "array", items: { type: "string" }, description: "Ce se schimbă concret." },
-        text_nou: { type: "string", description: "Headline-ul nou, în română, fără numele brandului." },
+        text_nou: { type: "string", description: "Headline-ul nou, în română, fără numele brandului, maxim 6 cuvinte." },
+        imprumutat: { type: "array", items: { type: "string" }, description: "Ce preia din reclamele care au funcționat ale brandului." },
         prompt_imagine: { type: "string", description: "Descriere completă în engleză pentru generatorul de imagini." } },
-        required: ["titlu", "risc", "descriere", "de_ce_distinct", "legatura_cu_identitatea", "culori", "pastrat", "schimbat", "text_nou", "prompt_imagine"] } },
+        required: ["titlu", "risc", "descriere", "de_ce_distinct", "legatura_cu_identitatea", "culori", "pastrat", "schimbat", "text_nou", "imprumutat", "prompt_imagine"] } },
+      mascota: { type: "object", properties: {
+        nume: { type: "string" }, descriere: { type: "string" }, svg: { type: "string" } }, required: ["nume", "descriere", "svg"] },
+      zone: { type: "object", properties: {
+        produs: { type: "array", items: { type: "integer" }, description: "[ymin, xmin, ymax, xmax] 0–1000" },
+        text: { type: "array", items: { type: "array", items: { type: "integer" } }, description: "Blocuri de text mare, fiecare [ymin, xmin, ymax, xmax] 0–1000" } },
+        required: ["produs", "text"] },
       urmatorul_pas: { type: "string" },
     },
-    required: ["diagnostic", "coduri_comune", "pastrezi", "schimbi", "paleta", "directii", "urmatorul_pas"],
+    required: ["diagnostic", "coduri_comune", "pastrezi", "schimbi", "paleta", "directii", "mascota", "zone", "urmatorul_pas"],
   };
   parts.push({ text: `Date din analiză (JSON):\n${JSON.stringify(facts)}\n\nBrief-ul utilizatorului (JSON):\n${JSON.stringify(brief)}` });
   const txt = await d.gemini({
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: "user", parts }],
-    generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 7000 },
+    generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 14000 },
   });
   let result: any;
   try { result = JSON.parse(txt.replace(/^```(json)?|```$/g, "")); } catch { throw new Error("Răspunsul pentru rebranding nu a putut fi citit. Încearcă din nou."); }
   result.directii = (result.directii ?? []).slice(0, 3);
   result.concurent = rival;
+  result.a_functionat = merged;
+  // SVG-ul mascotei: păstrăm doar forme simple (fără script, imagini externe sau handler-e)
+  if (result.mascota?.svg) {
+    const svg = String(result.mascota.svg);
+    result.mascota.svg = /<script|<image|<foreignObject|on\w+=|href=/i.test(svg) || !/^\s*<svg[\s>]/i.test(svg) ? "" : svg.slice(0, 6000);
+  }
 
   const { data: row, error } = await d.supabase.from("rebrands")
     .insert({ analysis_id: analysisId, brief, result, created_by: email }).select().single();

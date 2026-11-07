@@ -280,3 +280,6 @@ ol.ranking li.orig { color: var(--muted); list-style: none; margin-left: -1.2rem
 .ks b { margin-right: 0.25rem; font-size: 0.72rem; color: var(--muted); }
 
 .gen-row{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin:.8rem 0}
+
+.mascot-row{display:flex;gap:1rem;align-items:center;margin:.8rem 0;padding:.8rem;border:1px solid var(--line,#e5e2dc);border-radius:12px}
+.mascot{width:96px;height:96px;flex:none}.mascot svg{width:100%;height:100%}

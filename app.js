@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071425";
+const APP_VERSION = "202611071445";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -894,6 +894,86 @@ function drawHeadline(x, w, h, text, dark, light) {
   const y0 = band / 2 - ((lines.length - 1) * size * 1.08) / 2;
   lines.forEach((ln, k) => x.fillText(ln, w / 2, y0 + k * size * 1.08));
 }
+// Mascota: SVG cu 4 culori-șablon, înlocuite cu paleta direcției
+function mascotSvg(svg, pal) {
+  if (!svg) return "";
+  const [dark, , mid, light] = [pal[0], pal[1], pal[Math.max(1, pal.length - 2)], pal[pal.length - 1]];
+  const hex = (c) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+  return svg.replace(/#111111/gi, hex(dark)).replace(/#aa0000/gi, hex(pal[Math.min(1, pal.length - 1)] ?? mid))
+    .replace(/#00aa00/gi, hex(mid)).replace(/#ffffff/gi, lum(light) > 200 ? hex(light) : "#ffffff");
+}
+const svgImage = (svg) => new Promise((res) => {
+  if (!svg) return res(null);
+  const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null);
+  i.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg.includes("xmlns") ? svg : svg.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"'));
+});
+function wrapText(x, text, maxW, size, weight = 800) {
+  const words = String(text).toUpperCase().split(/\s+/); const lines = []; let cur = "";
+  x.font = `${weight} ${size}px Inter, Helvetica, Arial, sans-serif`;
+  for (const wd of words) { const t = cur ? cur + " " + wd : wd; if (x.measureText(t).width > maxW && cur) { lines.push(cur); cur = wd; } else cur = t; }
+  if (cur) lines.push(cur); return lines;
+}
+// Layout nou montat din reclama ta: produsul decupat (fără textul vechi), headline nou, paleta direcției, mascota
+async function composeAd(url, d, r) {
+  const pal = (d.culori ?? []).map(hexRgb).filter(Boolean).sort((p, q) => lum(p) - lum(q));
+  if (pal.length < 2) return null;
+  const img = await loadImage(url), W = img.naturalWidth, H = img.naturalHeight;
+  const c = document.createElement("canvas"); c.width = W; c.height = H; const x = c.getContext("2d");
+  const rgb = (p, a = 1) => `rgba(${p[0]},${p[1]},${p[2]},${a})`;
+  const dark = pal[0], light = lum(pal[pal.length - 1]) > 170 ? pal[pal.length - 1] : [255, 255, 255];
+  const accent = pal[Math.min(pal.length - 1, Math.max(1, Math.floor(pal.length / 2)))];
+  const risc = d.risc ?? "echilibrat";
+  // decupajul produsului: cutia de la Gemini, lărgită; textele vechi rămân în afara decupajului
+  const z = r.zone ?? {}, P = (z.produs?.length === 4 ? z.produs : [280, 200, 1000, 800]).map((v) => v / 1000);
+  const texts = (z.text ?? []).filter((t) => t?.length === 4).map((t) => t.map((v) => v / 1000));
+  let [y0, x0, y1, x1] = [P[0] - 0.04, P[1] - (risc === "sigur" ? 0.25 : 0.12), P[2] + 0.04, P[3] + (risc === "sigur" ? 0.25 : 0.12)];
+  for (const t of texts) if (t[2] > y0 && t[2] < (P[0] + P[2]) / 2 && t[0] < y0 + 0.05) y0 = Math.min(t[2] + 0.01, P[0]); // sare peste textul de deasupra produsului
+  y0 = Math.max(0, y0); x0 = Math.max(0, x0); y1 = Math.min(1, y1); x1 = Math.min(1, x1);
+  const sx = x0 * W, sy = y0 * H, sw = (x1 - x0) * W, sh = (y1 - y0) * H;
+  // fundal: scena păstrată (sigur) sau scenă nouă în paleta direcției
+  if (risc === "sigur") {
+    const k = Math.max(W / sw, H / sh); // „cover”, fără deformare
+    x.drawImage(img, sx, sy, sw, sh, (W - sw * k) / 2, H - sh * k, sw * k, sh * k);
+    x.fillStyle = rgb(dark, 0.18); x.fillRect(0, 0, W, H);
+  } else {
+    const g = x.createLinearGradient(0, 0, W * 0.3, H); pal.forEach((p, k) => g.addColorStop(k / (pal.length - 1), rgb(p)));
+    x.fillStyle = g; x.fillRect(0, 0, W, H);
+    // forme grafice: cercuri mari (echilibrat) sau raze (curajos)
+    x.save();
+    if (risc === "curajos") { x.translate(W / 2, H * 0.62); for (let k = 0; k < 18; k++) { x.rotate(Math.PI / 9); x.fillStyle = rgb(k % 2 ? accent : light, 0.12); x.beginPath(); x.moveTo(0, 0); x.lineTo(W, -W * 0.18); x.lineTo(W, W * 0.18); x.fill(); } }
+    else { x.fillStyle = rgb(light, 0.14); x.beginPath(); x.arc(W * 0.5, H * 0.62, W * 0.42, 0, 7); x.fill(); x.fillStyle = rgb(accent, 0.25); x.beginPath(); x.arc(W * 0.5, H * 0.62, W * 0.3, 0, 7); x.fill(); }
+    x.restore();
+    // produsul din reclama ta, ca fotografie decupată
+    const boxH = H * 0.64, boxW = Math.min(W * 0.78, boxH * (sw / sh)), bx = (W - boxW) / 2, by = H * 0.3;
+    const ph = document.createElement("canvas"); ph.width = sw; ph.height = sh; const px = ph.getContext("2d");
+    px.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+    if (risc === "curajos") { // ambalaj în culorile noi
+      const id = px.getImageData(0, 0, sw, sh), a = id.data, k = pal.length - 1;
+      for (let i = 0; i < a.length; i += 4) {
+        const t = Math.min(0.9999, lum([a[i], a[i + 1], a[i + 2]]) / 255) * k, j = Math.floor(t), f = t - j, A = pal[j], B = pal[j + 1];
+        if (Math.abs(a[i] - 127) < 5 && Math.abs(a[i + 1] - 127) < 5 && Math.abs(a[i + 2] - 127) < 5) continue;
+        for (let ch = 0; ch < 3; ch++) a[i + ch] = (A[ch] + (B[ch] - A[ch]) * f) * 0.6 + a[i + ch] * 0.4;
+      }
+      px.putImageData(id, 0, 0);
+    }
+    x.save(); x.shadowColor = "rgba(0,0,0,.35)"; x.shadowBlur = W * 0.04; x.shadowOffsetY = W * 0.015;
+    const rad = W * 0.03; x.beginPath(); x.roundRect(bx, by, boxW, boxH, rad); x.fillStyle = rgb(dark); x.fill(); x.restore();
+    x.save(); x.beginPath(); x.roundRect(bx, by, boxW, boxH, rad); x.clip(); x.drawImage(ph, bx, by, boxW, boxH); x.restore();
+  }
+  // headline nou, pe zona lui (nu peste textul vechi)
+  const bandH = H * (risc === "sigur" ? 0.22 : 0.26);
+  if (risc === "sigur") { const g = x.createLinearGradient(0, 0, 0, bandH * 1.3); g.addColorStop(0, rgb(dark, 0.95)); g.addColorStop(0.8, rgb(dark, 0.8)); g.addColorStop(1, rgb(dark, 0)); x.fillStyle = g; x.fillRect(0, 0, W, bandH * 1.3); }
+  let size = Math.round(bandH * 0.36), lines;
+  do { lines = wrapText(x, d.text_nou ?? "", W * 0.84, size); if (lines.length * size * 1.05 <= bandH * 0.8) break; size -= 2; } while (size > 12);
+  x.font = `800 ${size}px Inter, Helvetica, Arial, sans-serif`; x.fillStyle = rgb(light); x.textAlign = "center"; x.textBaseline = "middle";
+  const ty = bandH * 0.55 - ((lines.length - 1) * size * 1.05) / 2;
+  lines.forEach((ln, k) => x.fillText(ln, W / 2, ty + k * size * 1.05));
+  x.fillStyle = rgb(accent); x.fillRect(W * 0.42, ty + lines.length * size * 1.05 - size * 0.25, W * 0.16, Math.max(3, H * 0.006));
+  // mascota, în colț, peste produs
+  const m = await svgImage(mascotSvg(r.mascota?.svg, pal));
+  if (m) { const ms = W * (risc === "curajos" ? 0.4 : 0.32); x.drawImage(m, W - ms - W * 0.03, H - ms - H * 0.02, ms, ms); }
+  return new Promise((res) => c.toBlob(res, "image/png"));
+}
 async function recolorPreview(url, hexes, headline = "") {
   const pal = hexes.map(hexRgb).filter(Boolean).sort((x, y) => lum(x) - lum(y));
   if (pal.length < 2) return null;
@@ -944,7 +1024,7 @@ async function genImages(box, rbId, r, images, baseUrl) {
       try {
         const out = await invoke({ action: "rebrand_image", rebrand_id: rbId, index: i });
         if (out?.need_key) {
-          st.innerHTML = "Reclamele noi sunt făcute direct pe reclama ta (paletă și headline nou). Pentru o editare AI a imaginii originale " +
+          st.innerHTML = "Layout-urile noi sunt montate din reclama ta (produsul decupat, fără textul vechi), cu headline-ul nou, paleta direcției și mascota. Pentru o editare AI a imaginii originale " +
             "(scenă, sticlă, lumină) adaugă în Supabase secretul <b>POLLINATIONS_KEY</b> (cheie gratuită de pe enter.pollinations.ai).";
           if (btn) btn.classList.add("hidden");
           return;
@@ -983,6 +1063,9 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
       <div><h4>Păstrezi</h4><ul>${(r.pastrezi ?? []).map((x) => `<li>✓ ${esc(x)}</li>`).join("")}</ul></div>
       <div><h4>Schimbi</h4><ul>${(r.schimbi ?? []).map((x) => `<li>→ ${esc(x)}</li>`).join("")}</ul></div>
     </div>
+    ${r.mascota?.svg ? `<div class="mascot-row"><div class="mascot">${mascotSvg(r.mascota.svg, (r.directii?.[0]?.culori ?? []).map(hexRgb).filter(Boolean).sort((p, q) => lum(p) - lum(q))) || ""}</div>
+      <div><h4>Mascota propusă: ${esc(r.mascota.nume)}</h4><p class="muted small">${esc(r.mascota.descriere)}</p></div></div>` : ""}
+    ${r.a_functionat?.length ? `<div class="chips-row"><span class="muted small">A funcționat în alte reclame ale brandului:</span>${r.a_functionat.map((w) => `<span class="chip good">${esc(w.element)} +${Math.round(w.delta * 100)} pp</span>`).join("")}</div>` : ""}
     <div class="dirs">${(r.directii ?? []).map((d, i) => `<div class="dir">
       ${images[i] ? `<div class="ba" style="--x:50%"><img src="${baseUrl}" alt="" /><img class="after" src="${imgUrl(images[i])}" alt="" />
         <input type="range" min="0" max="100" value="50" aria-label="Înainte / după" /><span class="ba-l">înainte</span><span class="ba-r">${esc(d.sursa_imagine ?? "după")}</span></div>`
@@ -994,13 +1077,14 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
         ${(d.pastrat?.length || d.schimbat?.length) ? `<div class="ks">
           ${d.pastrat?.length ? `<div><b>Păstrează</b>${d.pastrat.map((x) => `<span class="chip good">${esc(x)}</span>`).join("")}</div>` : ""}
           ${d.schimbat?.length ? `<div><b>Schimbă</b>${d.schimbat.map((x) => `<span class="chip warn">${esc(x)}</span>`).join("")}</div>` : ""}</div>` : ""}
+        ${d.imprumutat?.length ? `<div class="ks"><div><b>Reutilizat</b>${d.imprumutat.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div></div>` : ""}
         <p class="muted small"><b>De ce e distinct:</b> ${esc(d.de_ce_distinct)}</p>
         ${d.legatura_cu_identitatea ? `<p class="muted small"><b>Identitate:</b> ${esc(d.legatura_cu_identitatea)}</p>` : ""}
         <details><summary>Prompt pentru imagine</summary><p class="small">${esc(d.prompt_imagine)}</p>
           <button type="button" class="ghost sm" data-copy="${esc(d.prompt_imagine)}">Copiază promptul</button></details>
       </div></div>`).join("")}</div>
     <div class="gen-row"><button type="button" class="ghost${(r.directii ?? []).every((_, i) => images[i]) ? " hidden" : ""}" data-gen>🎨 Editează reclama cu AI</button>
-      <span class="muted small" data-gen-status>${(r.directii ?? []).every((_, i) => images[i]) ? "" : "Până atunci vezi reclama ta cu paleta și headline-ul nou."}</span></div>
+      <span class="muted small" data-gen-status>${(r.directii ?? []).every((_, i) => images[i]) ? "" : "Vezi layout-ul nou montat din reclama ta."}</span></div>
     <div class="ab"><button type="button" class="primary big" data-ab>▶ Testează direcțiile în panel (A/B)</button>
       <div class="muted small">Originalul și fiecare direcție trec prin același panel orb; câștigă varianta recunoscută cel mai bine.</div>
       <div class="muted" data-ab-status></div><div data-ab-out></div></div>
@@ -1015,11 +1099,11 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
     if (images[i] || !(d.culori?.length >= 2) || !baseUrl) return;
     const ph = box.querySelector(`[data-ph="${i}"]`);
     try {
-      const blob = await recolorPreview(baseUrl, d.culori, d.text_nou);
+      const blob = await composeAd(baseUrl, d, r);
       if (!blob) { if (ph) ph.textContent = "Fără imagine"; return; }
       previews[i] = blob;
       if (images[i]) return;
-      setBA(box, i, baseUrl, URL.createObjectURL(blob), "pe reclama ta: paletă + text nou");
+      setBA(box, i, baseUrl, URL.createObjectURL(blob), "layout nou din reclama ta");
     } catch { if (ph && !images[i]) ph.textContent = "Previzualizarea nu a putut fi generată"; }
   });
   const ab = box.querySelector("[data-ab]");
