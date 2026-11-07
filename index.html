@@ -5,7 +5,7 @@
   <meta http-equiv="Cache-Control" content="no-cache" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Fără logo — laboratorul de amprentă a brandului</title>
-  <link rel="stylesheet" href="styles.css?v=202611071121" />
+  <link rel="stylesheet" href="styles.css?v=202611071127" />
 </head>
 <body>
   <header>
@@ -60,7 +60,8 @@
         </div>
       </div>
       <div class="card">
-        <h2>Reclame în categorie</h2>
+        <div class="card-head"><h2>Reclame în categorie</h2>
+          <button id="start-cta" class="primary inline-cta hidden" type="button">▶ Pornește analiza</button></div>
         <div id="ad-gallery" class="gallery"></div>
       </div>
     </section>
@@ -91,7 +92,13 @@
             <label>Evaluări per variantă <input id="n-evals" type="number" min="1" max="30" value="10" /></label>
             <label class="inline"><input type="checkbox" id="use-memory" checked /> memorie însămânțată</label>
             <label class="inline"><input type="checkbox" id="control" /> + control fără memorie (doar bază)</label>
-            <button id="run" class="primary" type="button">Rulează panelul orb</button>
+            <ol class="steps muted">
+              <li>Trage un dreptunghi peste logo (stratul <b>Logo</b> e selectat).</li>
+              <li>Opțional: adaugă elemente (mascota, fundalul…) și marchează-le.</li>
+              <li>Apasă butonul de mai jos.</li>
+            </ol>
+            <button id="run" class="primary big" type="button">▶ Pornește analiza</button>
+            <div id="progress-wrap" class="hidden"><div class="pbar"><span id="pbar-fill"></span></div></div>
             <div id="progress" class="muted"></div>
           </div>
         </div>
@@ -111,6 +118,6 @@
 
   <div id="lightbox" class="lightbox hidden"><img alt="" /><div class="lb-cap"></div></div>
   <div id="tip" class="tip hidden"></div>
-  <script type="module" src="app.js?v=202611071121"></script>
+  <script type="module" src="app.js?v=202611071127"></script>
 </body>
 </html>

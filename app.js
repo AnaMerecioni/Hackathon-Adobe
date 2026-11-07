@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071121";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071127";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = (s) => document.querySelector(s);
@@ -18,10 +18,15 @@ function toScaledBlob(source, w, h, type = "image/png") {
   c.getContext("2d").drawImage(source, 0, 0, c.width, c.height);
   return new Promise((res) => c.toBlob(res, type, 0.9));
 }
+const OK_TYPES = ["image/png", "image/jpeg", "image/webp"];
 async function scaleFile(file) {
-  const bmp = await createImageBitmap(file);
-  if (Math.max(bmp.width, bmp.height) <= MAX_SIDE) return file;
-  return toScaledBlob(bmp, bmp.width, bmp.height, file.type === "image/png" ? "image/png" : "image/jpeg");
+  let bmp;
+  try { bmp = await createImageBitmap(file); }
+  catch { throw new Error(`„${file.name}” nu e o imagine suportată. Folosește PNG, JPG sau WebP.`); }
+  const type = file.type === "image/jpg" ? "image/jpeg" : file.type;
+  // telefoanele trimit uneori „image/jpg” sau un tip gol: re-encodăm ca să fie acceptat de Storage
+  if (Math.max(bmp.width, bmp.height) <= MAX_SIDE && OK_TYPES.includes(type) && type === file.type) return file;
+  return toScaledBlob(bmp, bmp.width, bmp.height, type === "image/png" ? "image/png" : "image/jpeg");
 }
 async function sha(blob) {
   const d = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
@@ -56,13 +61,7 @@ let brands = [];
 let ads = [];
 
 // ---------- tab-uri ----------
-document.querySelectorAll("nav button").forEach((b) =>
-  b.addEventListener("click", () => {
-    document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x === b));
-    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${b.dataset.tab}`));
-    if (b.dataset.tab === "history") loadHistory();
-  }),
-);
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
 const category = () => $("#category").value.trim().toLowerCase();
 try { const c = localStorage.getItem("fl-category"); if (c) $("#category").value = c; } catch {}
@@ -86,15 +85,33 @@ async function loadData() {
   }).join("") || '<li class="muted">Niciun brand încă</li>';
   $("#ad-brand").innerHTML = brands.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("");
 
-  const thumb = (a, cls = "") => `<div class="thumb ${cls}" data-id="${a.id}"><img src="${imgUrl(a.image_path)}" loading="lazy" alt="" />
-    <div><span class="tag ${a.role}">${a.role === "memory" ? "memorie" : "test"}</span> ${esc(bn(a.brand_id))}${a.title ? " · " + esc(a.title) : ""}</div></div>`;
-  $("#ad-gallery").innerHTML = ads.map((a) => thumb(a)).join("") || '<p class="muted">Nicio reclamă încă.</p>';
+  const thumb = (a, cta = false) => `<div class="thumb" data-id="${a.id}"><img src="${imgUrl(a.image_path)}" loading="lazy" alt=""
+      onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'img-missing',textContent:'Imaginea nu s-a încărcat'}))" />
+    <div><span class="tag ${a.role}">${a.role === "memory" ? "memorie" : "test"}</span> ${esc(bn(a.brand_id))}${a.title ? " · " + esc(a.title) : ""}</div>
+    ${cta && a.role === "test" ? `<button class="cta" type="button" data-analyze="${a.id}">▶ Analizează</button>` : ""}</div>`;
+  $("#ad-gallery").innerHTML = ads.map((a) => thumb(a, true)).join("") || '<p class="muted">Nicio reclamă încă.</p>';
+  $("#ad-gallery").querySelectorAll("[data-analyze]").forEach((b) => b.addEventListener("click", () => goAnalyze(b.dataset.analyze)));
+  const testCount = ads.filter((a) => a.role === "test").length;
+  $("#start-cta").classList.toggle("hidden", !testCount);
   const tests = ads.filter((a) => a.role === "test");
   $("#test-gallery").innerHTML = tests.map((a) => thumb(a)).join("") || '<p class="muted">Încarcă întâi o reclamă cu rol „Test”.</p>';
-  $("#test-gallery").querySelectorAll(".thumb").forEach((t) => t.addEventListener("click", () => {
-    $("#test-gallery").querySelectorAll(".thumb").forEach((x) => x.classList.toggle("selected", x === t));
-    openEditor(ads.find((a) => a.id === t.dataset.id));
-  }));
+  $("#test-gallery").querySelectorAll(".thumb").forEach((t) => t.addEventListener("click", () => selectTest(t.dataset.id)));
+}
+
+function switchTab(name) {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${name}`));
+  if (name === "history") loadHistory();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function selectTest(id) {
+  $("#test-gallery").querySelectorAll(".thumb").forEach((x) => x.classList.toggle("selected", x.dataset.id === id));
+  openEditor(ads.find((a) => a.id === id));
+}
+function goAnalyze(id) {
+  switchTab("analyze");
+  const first = id ?? ads.find((a) => a.role === "test")?.id;
+  if (first) selectTest(first);
 }
 
 $("#brand-form").addEventListener("submit", async (e) => {
@@ -115,7 +132,8 @@ $("#ad-form").addEventListener("submit", async (e) => {
   $("#ad-status").textContent = `Se încarcă ${files.length} imagini…`;
   const skipped = [];
   for (const orig of files) {
-    const f = await scaleFile(orig);
+    let f;
+    try { f = await scaleFile(orig); } catch (err) { skipped.push(err.message); continue; }
     const sha256 = await sha(f);
     const dup = ads.find((a) => a.sha256 === sha256);
     if (dup) { skipped.push(`${orig.name} (există deja la ${brands.find((b) => b.id === dup.brand_id)?.name}, ${dup.role === "memory" ? "memorie" : "test"})`); continue; }
@@ -132,6 +150,8 @@ $("#ad-form").addEventListener("submit", async (e) => {
   e.target.reset();
   loadData();
 });
+
+$("#start-cta").addEventListener("click", () => goAnalyze());
 
 // ---------- editor de mască ----------
 const canvas = $("#canvas");
@@ -155,6 +175,7 @@ async function openEditor(ad) {
   $("#editor").classList.remove("hidden");
   $("#result").classList.add("hidden");
   renderLayers(); draw();
+  $("#editor").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderLayers() {
@@ -290,7 +311,8 @@ $("#run").addEventListener("click", async () => {
   if (!current) return;
   if (!current.layers[0].rects.length && !confirm("Nu ai mascat niciun logo. Continui?")) return;
   const btn = $("#run"), prog = $("#progress");
-  btn.disabled = true;
+  const bar = (f) => { $("#progress-wrap").classList.remove("hidden"); $("#pbar-fill").style.width = `${Math.round(f * 100)}%`; };
+  btn.disabled = true; btn.textContent = "Analiza rulează…"; bar(0.03);
   try {
     prog.textContent = "Pregătesc variantele…";
     const main = await createAnalysis({ useMemory: $("#use-memory").checked, withAblations: true });
@@ -298,15 +320,16 @@ $("#run").addEventListener("click", async () => {
     if ($("#control").checked && $("#use-memory").checked) control = await createAnalysis({ useMemory: false, withAblations: false });
     const all = [...main.variants, ...(control?.variants ?? [])];
     prog.textContent = `Panelul evaluează 0 / ${all.length} variante…`;
-    await runAll(all, (d, n, v) => (prog.textContent = `Panelul evaluează ${d} / ${n} variante… (ultima: ${v.element ?? v.kind})`));
-    prog.textContent = "Calculez diagnosticul și scriu raportul…";
+    await runAll(all, (d, n, v) => { bar(0.05 + 0.8 * (d / n)); prog.textContent = `Panelul evaluează ${d} / ${n} variante… (ultima: ${v.element ?? v.kind})`; });
+    prog.textContent = "Calculez diagnosticul, similaritatea și scriu raportul…"; bar(0.9);
     await invoke({ action: "finalize", analysis_id: main.analysis.id });
     if (control) await invoke({ action: "finalize", analysis_id: control.analysis.id });
-    prog.textContent = "Gata.";
+    prog.textContent = "Gata."; bar(1);
     await showResult($("#result"), main.analysis.id, control?.analysis.id);
+    $("#result").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (e) {
     prog.innerHTML = `<span class="err">Eroare: ${esc(e.message)}</span>`;
-  } finally { btn.disabled = false; }
+  } finally { btn.disabled = false; btn.textContent = "▶ Pornește analiza"; }
 });
 
 // ---------- rezultate ----------
