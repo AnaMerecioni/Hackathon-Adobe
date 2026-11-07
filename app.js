@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071131";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071137";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = (s) => document.querySelector(s);
@@ -7,7 +7,8 @@ const MASK = "#7f7f7f";            // aceeași mascare plată pe toate reclamele
 const COLORS = ["#e4572e", "#2a9d5c", "#3a6ea5", "#c98a00", "#8e44ad", "#16a3a3", "#d1495b", "#5b6b2f"];
 const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const imgUrl = (path) => sb.storage.from("ads").getPublicUrl(path).data.publicUrl;
+const imgUrl = (path) => sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+const BUCKET = "creative"; // nume neutru: URL-urile cu „/ads/” sunt blocate de extensiile anti-reclame
 const MAX_SIDE = 1024; // imagini mici → cereri mici către Gemini
 
 // Redimensionează un canvas/imagine la maxim MAX_SIDE și întoarce un Blob
@@ -138,8 +139,8 @@ $("#ad-form").addEventListener("submit", async (e) => {
     const dup = ads.find((a) => a.sha256 === sha256);
     if (dup) { skipped.push(`${orig.name} (există deja la ${brands.find((b) => b.id === dup.brand_id)?.name}, ${dup.role === "memory" ? "memorie" : "test"})`); continue; }
     const ext = f.type === "image/png" ? "png" : f.type === "image/webp" ? "webp" : "jpg";
-    const path = `ads/${crypto.randomUUID()}.${ext}`;
-    const up = await sb.storage.from("ads").upload(path, f, { contentType: f.type });
+    const path = `img/${crypto.randomUUID()}.${ext}`;
+    const up = await sb.storage.from(BUCKET).upload(path, f, { contentType: f.type });
     if (up.error) { $("#ad-status").textContent = up.error.message; return; }
     const { error } = await sb.from("ads").insert({ brand_id, role: $("#ad-role").value, title: $("#ad-title").value || null, image_path: path, sha256 });
     if (error) { $("#ad-status").textContent = error.message; return; }
@@ -279,7 +280,7 @@ async function invoke(body) {
 }
 
 async function uploadBlob(path, blob) {
-  const { error } = await sb.storage.from("ads").upload(path, blob, { contentType: blob.type || "image/png", upsert: true });
+  const { error } = await sb.storage.from(BUCKET).upload(path, blob, { contentType: blob.type || "image/png", upsert: true });
   if (error) throw error;
   return path;
 }

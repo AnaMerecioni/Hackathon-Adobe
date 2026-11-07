@@ -23,6 +23,8 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 const MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash-lite";
+// Bucket cu nume neutru: URL-urile cu „/ads/” sunt blocate de extensiile anti-reclame
+const BUCKET = "creative";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
@@ -48,7 +50,7 @@ const imgCache = new Map<string, Promise<Img>>();
 function loadImage(path: string): Promise<Img> {
   if (!imgCache.has(path)) {
     imgCache.set(path, (async () => {
-      const { data, error } = await supabase.storage.from("ads").download(path);
+      const { data, error } = await supabase.storage.from(BUCKET).download(path);
       if (error || !data) throw new Error(`Nu pot descărca imaginea ${path}`);
       const bytes = new Uint8Array(await data.arrayBuffer());
       const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
@@ -272,6 +274,24 @@ async function computeSimilarity(a: any, base: any, target: string) {
   };
 }
 
+// Mută o singură dată imaginile din vechiul bucket „ads” în „creative” (cale „ads/…” → „img/…”)
+async function migrateStorage() {
+  const moved: string[] = [], failed: string[] = [];
+  for (const table of ["ads", "variants"] as const) {
+    const { data: rows } = await supabase.from(table).select("id,image_path");
+    for (const r of rows ?? []) {
+      const { data: blob } = await supabase.storage.from("ads").download(r.image_path);
+      if (!blob) continue; // deja mutată
+      const newPath = r.image_path.startsWith("ads/") ? "img/" + r.image_path.slice(4) : r.image_path;
+      const up = await supabase.storage.from(BUCKET).upload(newPath, blob, { contentType: blob.type || "image/jpeg", upsert: true });
+      if (up.error) { failed.push(`${r.image_path}: ${up.error.message}`); continue; }
+      await supabase.from(table).update({ image_path: newPath }).eq("id", r.id);
+      moved.push(newPath);
+    }
+  }
+  return { moved: moved.length, failed };
+}
+
 // ---------- finalize ----------
 async function finalize(analysisId: string) {
   const { data: a } = await supabase.from("analyses").select("*, ads!inner(*, brands!inner(*))").eq("id", analysisId).single();
@@ -368,6 +388,7 @@ Deno.serve(async (req) => {
       return json({ model: MODEL, raw_length: raw.length, length: k.length, prefix: k.slice(0, 4),
         had_whitespace_or_quotes: raw !== k, non_ascii: /[^\x21-\x7e]/.test(k) });
     }
+    if (body.action === "migrate_storage") return json(await migrateStorage());
     if (body.action === "run_variant" && body.variant_id) {
       return json(await runVariant(body.variant_id));
     }

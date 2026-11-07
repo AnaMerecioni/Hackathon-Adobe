@@ -12,7 +12,7 @@ Pre-test instant care arată dacă o reclamă lucrează pentru brandul care o pl
 
 - **Frontend:** HTML + JS static (fără build), publicat pe GitHub Pages. Mascarea și ablația se fac în browser, pe canvas.
 - **Supabase** (proiectul `ysckyoffhrdfzcxspmhb`):
-  - Storage: bucket public `ads`
+  - Storage: bucket public `creative` (numele „ads” e blocat de extensiile anti-reclame)
   - Postgres: `brands`, `ads`, `analyses`, `variants`, `panel_votes`, `element_impacts` (cu RLS)
   - Edge function `panel` (`supabase/functions/panel/index.ts`):
     - `run_variant` — rulează ~10 evaluări (3 în paralel, cu reîncercare la limitele planului gratuit), amestecă ordinea candidaților la fiecare evaluare, folosește memoria însămânțată și salvează distribuțiile de probabilitate
