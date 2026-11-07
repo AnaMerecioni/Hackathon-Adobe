@@ -1,10 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071257";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071257";
+const APP_VERSION = "202611071329";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -413,7 +413,7 @@ async function showResult(el, analysisId, controlId) {
   if (!s) { el.innerHTML = `<h2>Analiză în curs</h2><p class="muted">Status: ${esc(a.status)}</p>`; return; }
 
   if (s.version === 2) {
-    el.innerHTML = summaryView({ a, s, imp, target }) +
+    el.innerHTML = summaryView({ a, s, imp, target }) + `<div class="rebrand-slot"></div>` +
       `<div class="details-toggle"><button type="button" class="ghost" data-toggle-stats>📊 Vezi analiza statistică</button></div>
        <div class="stats-details hidden">${compactStats({ a, s, vs, imp, target })}
          <div class="full-details hidden">${statsView({ a, s, vs, imp, target, ctrl })}</div></div>`;
@@ -423,6 +423,7 @@ async function showResult(el, analysisId, controlId) {
       btn.textContent = open ? "Ascunde analiza statistică" : "📊 Vezi analiza statistică";
       if (open) box.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+    mountRebrand(el.querySelector(".rebrand-slot"), { a, s, imp, target, analysisId, vs });
     el.querySelector("[data-toggle-full]").addEventListener("click", (e) => {
       e.preventDefault();
       const full = el.querySelector(".full-details");
@@ -743,6 +744,251 @@ function statsView({ a, s, vs, imp, target, ctrl, part }) {
       return `<figure><img src="${imgUrl(v.image_path)}" loading="lazy" alt="" />
       <figcaption><b>${v.kind === "base" ? "Bază (mascat)" : v.kind === "ablation" ? "Fără: " + esc(v.element) : "Generată: " + esc(v.element)}</b><br>
       ${pct(st?.mean ?? v.attribution)} · IC ${pctCI(st?.ci)}</figcaption></figure>`; }).join("")}</div>`;
+}
+
+// ---------- rebranding: interviu de brand (voce sau text) → 3 direcții → A/B test în panel ----------
+const BRIEF_Q = [
+  ["promisiune", "Ce promite brandul, într-o propoziție?", "ex. Apă pură, direct din inima munților"],
+  ["valori", "Care sunt cele 3 valori ale brandului?", "ex. puritate, natură, echilibru"],
+  ["personalitate", "Dacă brandul ar fi un om, cum ar fi?", "", ["prietenos", "premium", "jucăuș", "de încredere", "aventuros", "rebel", "cald", "minimalist"]],
+  ["ton", "Ce ton are comunicarea?", "", ["serios", "cald", "amuzant", "inspirațional", "direct"]],
+  ["pastreaza", "Ce active trebuie păstrate?", "culoare, mascotă, formă, slogan"],
+  ["evita", "Ce trebuie evitat?", "culori, stiluri sau asocieri nedorite"],
+  ["constrangeri", "Există constrângeri?", "ghid de brand, cerințe legale, buget"],
+  ["obiectiv", "Care e obiectivul rebrandingului?", ""],
+  ["public", "Cui te adresezi?", "ex. familii și tineri activi"],
+  ["curaj", "Cât de curajos poate fi?", "", ["ajustare fină", "echilibrat", "schimbare totală"]],
+];
+function needsRebrand(s) {
+  const sim = s.similarity ?? {}, conf = Object.values(s.confusion ?? {}).reduce((m, x) => Math.max(m, x.mean), 0);
+  return sim.generic === true || (sim.nearest != null && sim.own_brand != null && sim.nearest > sim.own_brand) || conf > (s.attribution ?? 0);
+}
+
+async function mountRebrand(slot, ctx) {
+  const { s, imp, target, analysisId } = ctx;
+  const rival = s.similarity?.nearest_brand ?? Object.entries(s.confusion ?? {}).sort((x, y) => y[1].mean - x[1].mean)[0]?.[0];
+  const need = needsRebrand(s);
+  const assets = imp.filter((i) => i.diagnosis === "asset_puternic").map((i) => i.element);
+  slot.innerHTML = `<div class="rb-cta ${need ? "hot" : ""}">
+      <div><b>${need ? `Reclama seamănă prea mult cu ${esc(rival ?? "concurența")}` : "Vrei să faci reclama și mai distinctivă?"}</b>
+      <p>${need ? "Răspunde la câteva întrebări despre brand și primești 3 direcții de rebranding, testate apoi automat în panel." : "Poți genera direcții de rebranding pornind de la identitatea brandului."}</p></div>
+      <button type="button" class="primary inline-cta" data-rb-open>✨ Pornește rebrandingul</button></div>
+    <div class="rb-panel hidden"></div><div class="rb-result"></div>`;
+  const panel = slot.querySelector(".rb-panel");
+  slot.querySelector("[data-rb-open]").addEventListener("click", () => {
+    panel.classList.toggle("hidden");
+    if (!panel.dataset.ready) { renderBriefForm(panel, ctx, { rival, assets }); panel.dataset.ready = 1; }
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  // ultimul rebranding salvat pentru această analiză
+  const { data: prev } = await sb.from("rebrands").select("*").eq("analysis_id", analysisId).order("created_at", { ascending: false }).limit(1);
+  if (prev?.[0]?.result) renderRebrand(slot.querySelector(".rb-result"), ctx, { id: prev[0].id, result: prev[0].result, images: prev[0].images ?? [], image_error: prev[0].image_error });
+}
+
+function renderBriefForm(panel, ctx, { rival, assets }) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  panel.innerHTML = `
+    <div class="rb-step"><span class="rb-num">1</span><div>
+      <h3>Interviu de brand</h3>
+      <p class="muted">Apasă pe microfon și povestește liber despre brand: ce promite, cum e, cui se adresează, ce vrei să păstrezi. Sau scrie mai jos.</p>
+      <div class="rb-voice">
+        ${SR ? `<button type="button" class="mic" data-mic title="Vorbește">🎙</button>` : `<span class="muted small">Dictarea nu e disponibilă în acest browser; scrie textul.</span>`}
+        <textarea data-transcript rows="4" placeholder="ex. Dorna e apa din inima munților Bucovinei, pură și naturală. Vrem să fim calzi și de încredere…"></textarea>
+      </div>
+      <button type="button" class="ghost" data-extract>✨ Completează formularul din ce am spus</button>
+      <span class="muted small" data-extract-status></span>
+    </div></div>
+    <div class="rb-step"><span class="rb-num">2</span><div>
+      <h3>Identitatea brandului</h3><p class="muted">Toate câmpurile sunt opționale. Poți corecta ce a completat AI-ul.</p>
+      <div class="rb-form">${BRIEF_Q.map(([k, q, ph, opts]) => `<label class="rb-q"><span>${q}</span>
+        ${opts ? `<div class="opts" data-opts="${k}">${opts.map((o) => `<button type="button" class="opt" data-v="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
+        <input data-k="${k}" placeholder="${esc(ph)}" /></label>`).join("")}</div>
+    </div></div>
+    <div class="rb-step"><span class="rb-num">3</span><div>
+      <h3>Generează</h3>
+      <label class="inline"><input type="checkbox" data-images checked /> generează și imagini pentru fiecare direcție (experimental)</label>
+      <button type="button" class="primary big" data-go>✨ Generează 3 direcții de rebranding</button>
+      <div class="muted" data-go-status></div>
+    </div></div>`;
+  const val = (k) => panel.querySelector(`[data-k="${k}"]`);
+  val("obiectiv").value = rival ? `diferențiere față de ${rival}` : "";
+  val("pastreaza").value = assets.join(", ");
+  // opțiunile rapide completează câmpul (multi-select pentru personalitate)
+  panel.querySelectorAll("[data-opts]").forEach((box) => box.addEventListener("click", (e) => {
+    const b = e.target.closest(".opt"); if (!b) return;
+    const k = box.dataset.opts, input = val(k), multi = k === "personalitate";
+    if (!multi) { box.querySelectorAll(".opt").forEach((x) => x.classList.toggle("on", x === b)); input.value = b.dataset.v; return; }
+    b.classList.toggle("on");
+    input.value = [...box.querySelectorAll(".opt.on")].map((x) => x.dataset.v).join(", ");
+  }));
+  // dictare (Web Speech API, română)
+  const mic = panel.querySelector("[data-mic]"), ta = panel.querySelector("[data-transcript]");
+  if (mic && SR) {
+    let rec = null, base = "";
+    mic.addEventListener("click", () => {
+      if (rec) { rec.stop(); return; }
+      rec = new SR(); rec.lang = "ro-RO"; rec.continuous = true; rec.interimResults = true;
+      base = ta.value ? ta.value.trim() + " " : "";
+      rec.onresult = (ev) => {
+        let fin = "", tmp = "";
+        for (const r of ev.results) (r.isFinal ? (fin += r[0].transcript + " ") : (tmp += r[0].transcript));
+        ta.value = base + fin + tmp;
+      };
+      rec.onend = () => { mic.classList.remove("rec"); rec = null; };
+      rec.onerror = (ev) => { panel.querySelector("[data-extract-status]").textContent = `Microfon: ${ev.error}`; };
+      rec.start(); mic.classList.add("rec");
+    });
+  }
+  panel.querySelector("[data-extract]").addEventListener("click", async (e) => {
+    const st = panel.querySelector("[data-extract-status]");
+    e.target.disabled = true; st.textContent = "Extrag răspunsurile…";
+    try {
+      const out = await invoke({ action: "brief_from_text", text: ta.value, brand: ctx.target });
+      let n = 0;
+      for (const [k] of BRIEF_Q) if (out?.[k]) { val(k).value = out[k]; n++; }
+      st.textContent = `Am completat ${n} răspunsuri. Verifică-le mai jos.`;
+    } catch (err) { st.innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+    finally { e.target.disabled = false; }
+  });
+  panel.querySelector("[data-go]").addEventListener("click", async (e) => {
+    const st = panel.querySelector("[data-go-status]"), btn = e.target;
+    const brief = Object.fromEntries(BRIEF_Q.map(([k]) => [k, val(k).value.trim()]).filter(([, v]) => v));
+    const images = panel.querySelector("[data-images]").checked;
+    btn.disabled = true; btn.textContent = "Generez direcțiile…";
+    st.textContent = images ? "Durează aproximativ un minut: întâi strategia, apoi imaginile." : "Durează câteva secunde.";
+    try {
+      const out = await invoke({ action: "rebrand", analysis_id: ctx.analysisId, brief, images });
+      const box = panel.parentElement.querySelector(".rb-result");
+      renderRebrand(box, ctx, out);
+      panel.classList.add("hidden");
+      box.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (err) { st.innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+    finally { btn.disabled = false; btn.textContent = "✨ Generează 3 direcții de rebranding"; }
+  });
+}
+
+// Previzualizare gratuită, în browser: recolorează reclama cu paleta direcției (gradient map pe luminozitate,
+// păstrând detaliile și zonele gri ale măștii neatinse). Rezultatul poate fi testat în panel ca orice variantă.
+const hexRgb = (h) => { const m = String(h).replace("#", "").match(/^([0-9a-f]{6})$/i); if (!m) return null; const n = parseInt(m[1], 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+const lum = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+async function recolorPreview(url, hexes) {
+  const pal = hexes.map(hexRgb).filter(Boolean).sort((x, y) => lum(x) - lum(y));
+  if (pal.length < 2) return null;
+  const img = await loadImage(url);
+  const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const x = c.getContext("2d"); x.drawImage(img, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height), px = d.data, k = pal.length - 1;
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i], g = px[i + 1], b = px[i + 2];
+    if (Math.abs(r - 127) < 5 && Math.abs(g - 127) < 5 && Math.abs(b - 127) < 5) continue; // masca rămâne gri
+    const t = Math.min(0.9999, lum([r, g, b]) / 255) * k, j = Math.floor(t), f = t - j;
+    const a = pal[j], z = pal[j + 1];
+    for (let ch = 0; ch < 3; ch++) {
+      const mapped = a[ch] + (z[ch] - a[ch]) * f, orig = px[i + ch];
+      px[i + ch] = mapped * 0.72 + orig * 0.28; // păstrăm o parte din textura originală
+    }
+  }
+  x.putImageData(d, 0, 0);
+  return new Promise((res) => c.toBlob(res, "image/png"));
+}
+
+function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error }) {
+  const baseV = ctx.vs.find((v) => v.kind === "base");
+  const baseUrl = baseV ? imgUrl(baseV.image_path) : "";
+  const RISK = { sigur: "good", echilibrat: "warn", curajos: "bad" };
+  const previews = [];
+  box.innerHTML = `<div class="rb-out">
+    <h3>Rebranding propus${r.concurent ? ` · departe de ${esc(r.concurent)}` : ""}</h3>
+    <p class="sum-text">${esc(r.diagnostic)}</p>
+    ${r.coduri_comune?.length ? `<div class="chips-row"><span class="muted small">Coduri comune cu concurentul:</span>${r.coduri_comune.map((c) => `<span class="chip warn">${esc(c)}</span>`).join("")}</div>` : ""}
+    <div class="palette">${(r.paleta ?? []).map((p) => `<button type="button" class="sw-big" data-copy="${esc(p.hex)}" title="Copiază ${esc(p.hex)}">
+      <span style="background:${esc(p.hex)}"></span><b>${esc(p.nume)}</b><small>${esc(p.hex)} · ${esc(p.rol)}</small></button>`).join("")}</div>
+    <div class="grid2 keep-change">
+      <div><h4>Păstrezi</h4><ul>${(r.pastrezi ?? []).map((x) => `<li>✓ ${esc(x)}</li>`).join("")}</ul></div>
+      <div><h4>Schimbi</h4><ul>${(r.schimbi ?? []).map((x) => `<li>→ ${esc(x)}</li>`).join("")}</ul></div>
+    </div>
+    <div class="dirs">${(r.directii ?? []).map((d, i) => `<div class="dir">
+      ${images[i] ? `<div class="ba" style="--x:50%"><img src="${baseUrl}" alt="" /><img class="after" src="${imgUrl(images[i])}" alt="" />
+        <input type="range" min="0" max="100" value="50" aria-label="Înainte / după" /><span class="ba-l">înainte</span><span class="ba-r">după</span></div>`
+        : `<div class="dir-ph" data-ph="${i}">${d.culori?.length >= 2 ? "Pregătesc previzualizarea…" : "Fără imagine"}</div>`}
+      ${(d.culori ?? []).length ? `<div class="mini-pal">${d.culori.map((h) => `<span style="background:${esc(h)}" title="${esc(h)}"></span>`).join("")}</div>` : ""}
+      <div class="dir-body"><div class="dir-head"><b>${esc(d.titlu)}</b><span class="chip ${RISK[d.risc] ?? ""}">${esc(d.risc)}</span></div>
+        <p>${esc(d.descriere)}</p>
+        <p class="muted small"><b>De ce e distinct:</b> ${esc(d.de_ce_distinct)}</p>
+        ${d.legatura_cu_identitatea ? `<p class="muted small"><b>Identitate:</b> ${esc(d.legatura_cu_identitatea)}</p>` : ""}
+        <details><summary>Prompt pentru imagine</summary><p class="small">${esc(d.prompt_imagine)}</p>
+          <button type="button" class="ghost sm" data-copy="${esc(d.prompt_imagine)}">Copiază promptul</button></details>
+      </div></div>`).join("")}</div>
+    ${image_error ? `<p class="alert atentie"><b>Imagini AI</b> ${esc(image_error.slice(0, 160))} Am generat în schimb, direct în browser, o previzualizare cu paleta fiecărei direcții. Pentru o machetă completă, copiază promptul într-un generator de imagini și încarcă rezultatul în editor, la „Variante generate”.</p>` : ""}
+    <div class="ab"><button type="button" class="primary big" data-ab>▶ Testează direcțiile în panel (A/B)</button>
+      <div class="muted small">Originalul și fiecare direcție trec prin același panel orb; câștigă varianta recunoscută cel mai bine.</div>
+      <div class="muted" data-ab-status></div><div data-ab-out></div></div>
+    ${r.urmatorul_pas ? `<div class="todo"><h3>Următorul pas</h3><p>${esc(r.urmatorul_pas)}</p></div>` : ""}
+  </div>`;
+  box.querySelectorAll(".ba input").forEach((inp) => inp.addEventListener("input", () => inp.parentElement.style.setProperty("--x", `${inp.value}%`)));
+  box.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); const t = b.innerHTML; b.classList.add("copied"); setTimeout(() => b.classList.remove("copied"), 900); } catch {}
+  }));
+  // previzualizări cu paleta pentru direcțiile fără imagine AI
+  (r.directii ?? []).forEach(async (d, i) => {
+    if (images[i] || !(d.culori?.length >= 2) || !baseUrl) return;
+    const ph = box.querySelector(`[data-ph="${i}"]`);
+    try {
+      const blob = await recolorPreview(baseUrl, d.culori);
+      if (!blob) { ph.textContent = "Fără imagine"; return; }
+      previews[i] = blob;
+      const after = URL.createObjectURL(blob);
+      ph.outerHTML = `<div class="ba" style="--x:50%"><img src="${baseUrl}" alt="" /><img class="after" src="${after}" alt="" />
+        <input type="range" min="0" max="100" value="50" aria-label="Înainte / după" /><span class="ba-l">înainte</span><span class="ba-r">paleta nouă</span></div>`;
+      const inp = box.querySelectorAll(".dir")[i].querySelector(".ba input");
+      inp.addEventListener("input", () => inp.parentElement.style.setProperty("--x", `${inp.value}%`));
+    } catch { ph.textContent = "Previzualizarea nu a putut fi generată"; }
+  });
+  const ab = box.querySelector("[data-ab]");
+  ab.addEventListener("click", () => runAB(box, ctx, r, images, ab, previews, rbId));
+}
+
+// A/B: originalul vs. fiecare direcție generată, același panel orb, aceeași statistică
+async function runAB(box, ctx, r, images, btn, previews = [], rbId = "x") {
+  const st = box.querySelector("[data-ab-status]"), out = box.querySelector("[data-ab-out]");
+  const baseV = ctx.vs.find((v) => v.kind === "base");
+  btn.disabled = true; btn.textContent = "Testul A/B rulează…";
+  try {
+    const { data: an, error } = await sb.from("analyses").insert({ ad_id: ctx.a.ad_id, category: ctx.s.category, use_memory: ctx.s.use_memory,
+      n_evals: ctx.s.n_evals ?? 10, generic_elements: ctx.s.generic_elements ?? [] }).select().single();
+    if (error) throw error;
+    // imaginile AI au prioritate; altfel urcăm previzualizarea cu paleta
+    const paths = [];
+    for (const [i] of r.directii.entries()) {
+      if (images[i]) paths[i] = images[i];
+      else if (previews[i]) paths[i] = await uploadBlob(`rebrand/${rbId}/${i}-paleta.png`, previews[i]);
+    }
+    if (!paths.some(Boolean)) throw new Error("Nu există încă imagini de testat. Așteaptă previzualizările sau încarcă o machetă în editor.");
+    const rows = [{ kind: "base", element: null, image_path: baseV.image_path },
+      ...r.directii.map((d, i) => paths[i] && { kind: "generated", element: d.titlu, image_path: paths[i] }).filter(Boolean)];
+    const variants = [];
+    for (const row of rows) {
+      const { data: v, error: ve } = await sb.from("variants").insert({ analysis_id: an.id, ...row }).select().single();
+      if (ve) throw ve; variants.push(v);
+    }
+    st.textContent = `Panelul evaluează 0 / ${variants.length} variante…`;
+    await runAll(variants, (d, n) => (st.textContent = `Panelul evaluează ${d} / ${n} variante…`));
+    st.textContent = "Calculez rezultatele…";
+    await invoke({ action: "finalize", analysis_id: an.id });
+    const { data: res } = await sb.from("analyses").select("summary").eq("id", an.id).single();
+    const S2 = res.summary, gens = [...(S2.generated ?? [])].sort((x, y) => y.mean - x.mean);
+    const win = gens[0];
+    out.innerHTML = `<div class="ab-res">
+      <div class="verdict ${win && win.lift > 0 && win.p_holm < 0.05 ? "good" : win && win.lift > 0 ? "warn" : "bad"}">
+        ${win ? (win.lift > 0 ? `Câștigă „${esc(win.element)}”: recunoașterea crește de la ${pct(S2.attribution)} la ${pct(win.mean)}` : "Nicio direcție nu bate originalul") : "—"}</div>
+      <ol class="ranking">${gens.map((g) => `<li><b>${esc(g.element)}</b> <span>${pct(g.mean)}</span>
+        <span class="chip ${g.lift > 0 ? (g.p_holm < 0.05 ? "good" : "warn") : "bad"}">${g.lift >= 0 ? "+" : "−"}${Math.abs(Math.round(g.lift * 100))} pp · ${g.p_holm < 0.05 ? "semnificativ" : "nesigur"}</span></li>`).join("")}
+        <li class="orig"><b>Original</b> <span>${pct(S2.attribution)}</span></li></ol>
+      ${statsView({ a: { ...ctx.a, report: "" }, s: S2, vs: [], imp: [], target: ctx.target, part: "chart1" })}
+    </div>`;
+    st.textContent = "Gata. Analiza A/B e salvată și în tab-ul Rezultate.";
+  } catch (err) { st.innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+  finally { btn.disabled = false; btn.textContent = "▶ Testează din nou (A/B)"; }
 }
 
 async function loadHistory() {

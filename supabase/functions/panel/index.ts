@@ -6,6 +6,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import * as S from "./stats.ts";
+import { rebrand, briefFromText } from "./rebrand.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -538,6 +539,13 @@ Deno.serve(async (req) => {
         had_whitespace_or_quotes: raw !== k, non_ascii: /[^\x21-\x7e]/.test(k) });
     }
     if (body.action === "migrate_storage") return json(await migrateStorage());
+    if (body.action === "brief_from_text") {
+      return json(await briefFromText({ supabase, gemini, inlineImage, geminiKey, bucket: BUCKET }, body.text ?? "", body.brand ?? "brand"));
+    }
+    if (body.action === "rebrand" && body.analysis_id) {
+      return json(await rebrand({ supabase, gemini, inlineImage, geminiKey, bucket: BUCKET },
+        body.analysis_id, body.brief ?? {}, !!body.images, email!));
+    }
     if (body.action === "run_variant" && body.variant_id) {
       return json(await runVariant(body.variant_id));
     }
@@ -548,8 +556,8 @@ Deno.serve(async (req) => {
     return json({ error: "Acțiune necunoscută. Folosește run_variant sau finalize." }, 400);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (body.variant_id) await supabase.from("variants").update({ status: "error" }).eq("id", body.variant_id);
-    if (body.analysis_id) await supabase.from("analyses").update({ status: "error", error: msg }).eq("id", body.analysis_id);
+    if (body.action === "run_variant" && body.variant_id) await supabase.from("variants").update({ status: "error" }).eq("id", body.variant_id);
+    if (body.action === "finalize" && body.analysis_id) await supabase.from("analyses").update({ status: "error", error: msg }).eq("id", body.analysis_id);
     return json({ error: msg }, 500);
   }
 });

@@ -8,6 +8,15 @@ Pre-test instant care arată dacă o reclamă lucrează pentru brandul care o pl
 2. **Analiză:** alegi o reclamă de test, tragi dreptunghiuri peste logo/nume (zona **Logo**) și definești elementele (mascota, sloganul, fundalul). Bifează „culoare” la un element cromatic. Poți încărca și variante generate, deja mascate. Apoi apeși **Rulează panelul orb**.
 3. **Rezultate:** vezi atribuirea, unde se duce restul probabilității, Δ per element cu diagnosticul (asset puternic / decor / element trădător) și raportul.
 
+## Rebranding
+
+Când reclama seamănă prea mult cu concurența (similaritate peste nivelul categoriei sau confuzie mare), pe pagina de rezultate apare „Pornește rebrandingul”:
+
+1. **Interviu de brand**: utilizatorul vorbește (Web Speech API, română) sau scrie liber; Gemini completează formularul de identitate (promisiune, valori, personalitate, ton, active de păstrat, ce eviți, constrângeri, obiectiv, public, curaj).
+2. **3 direcții** (sigur / echilibrat / curajos): diagnostic, coduri comune cu concurentul, paletă, ce păstrezi și ce schimbi, prompt de imagine.
+3. **Previzualizare**: imagine AI dacă modelul de imagine e disponibil, altfel recolorare cu paleta direcției direct în browser; slider înainte/după.
+4. **Test A/B**: originalul și direcțiile trec prin același panel orb; clasament cu lift și semnificație.
+
 ## Arhitectură
 
 - **Frontend:** HTML + JS static (fără build), publicat pe GitHub Pages. Mascarea și ablația se fac în browser, pe canvas.
