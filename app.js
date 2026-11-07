@@ -1,7 +1,14 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071221";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071225";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
+const APP_VERSION = "202611071225";
+fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
+  v = v?.trim();
+  if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
+}).catch(() => {});
 const $ = (s) => document.querySelector(s);
 const MASK = "#7f7f7f";            // aceeași mascare plată pe toate reclamele
 const COLORS = ["#e4572e", "#2a9d5c", "#3a6ea5", "#c98a00", "#8e44ad", "#16a3a3", "#d1495b", "#5b6b2f"];
