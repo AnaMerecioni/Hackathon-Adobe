@@ -5,7 +5,7 @@
   <meta http-equiv="Cache-Control" content="no-cache" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Fără logo — laboratorul de amprentă a brandului</title>
-  <link rel="stylesheet" href="styles.css?v=202611071252" />
+  <link rel="stylesheet" href="styles.css?v=202611071257" />
 </head>
 <body>
   <header>
@@ -78,7 +78,11 @@
           Fiecare <b>element</b> devine o variantă de ablație (zona e umplută cu culoarea din jur).
           Bifează „culoare” pentru un element cromatic: varianta rotește nuanța întregii imagini.</p>
         <div class="editor-wrap">
-          <canvas id="canvas"></canvas>
+          <div class="canvas-col">
+            <div id="drawbar" class="drawbar"></div>
+            <canvas id="canvas"></canvas>
+            <p class="muted small">Trage pe imagine ca să adaugi o zonă. Poți adăuga oricâte zone. Apasă ✕ pe o zonă din listă ca s-o ștergi.</p>
+          </div>
           <div class="side">
             <div class="row">
               <input id="el-name" placeholder="Element nou (ex. mascota)" />
@@ -121,6 +125,6 @@
 
   <div id="lightbox" class="lightbox hidden"><img alt="" /><div class="lb-cap"></div></div>
   <div id="tip" class="tip hidden"></div>
-  <script type="module" src="app.js?v=202611071252"></script>
+  <script type="module" src="app.js?v=202611071257"></script>
 </body>
 </html>

@@ -1,10 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071252";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071257";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071252";
+const APP_VERSION = "202611071257";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -216,13 +216,26 @@ async function openEditor(ad) {
 }
 
 function renderLayers() {
+  const color = (l, i) => (l.logo ? MASK : COLORS[i % COLORS.length]);
+  // Bara de deasupra imaginii: arată clar pe ce strat desenezi și permite schimbarea dintr-un click
+  $("#drawbar").innerHTML = `<span class="db-lbl">Desenezi pe:</span>` + current.layers.map((l, i) =>
+    `<button type="button" class="db-chip ${i === current.active ? "on" : ""}" data-pick="${i}">
+      <span class="sw" style="background:${color(l, i)}"></span>${esc(l.name)} <span class="cnt">${l.hue ? "nuanță" : l.rects.length}</span></button>`).join("");
+  $("#drawbar").querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => {
+    current.active = +b.dataset.pick; renderLayers(); draw();
+  }));
+  // Lista din dreapta: fiecare strat cu zonele lui, fiecare zonă se poate șterge separat
   $("#layers").innerHTML = current.layers.map((l, i) => `<li class="${i === current.active ? "active" : ""}" data-i="${i}">
-    <span><span class="sw" style="background:${l.logo ? MASK : COLORS[i % COLORS.length]}"></span>${esc(l.name)}${l.hue ? " (culoare)" : ""} · ${l.hue ? "nuanță" : l.rects.length + " zone"}</span>
-    <span>${l.rects.length ? `<button data-undo="${i}" title="Șterge ultima zonă">↶</button>` : ""}${l.logo ? "" : `<button data-del="${i}" title="Șterge elementul">✕</button>`}</span></li>`).join("");
+    <div class="ly-head"><span><span class="sw" style="background:${color(l, i)}"></span>${esc(l.name)}${l.hue ? " (culoare)" : ""}
+      · ${l.hue ? "nuanță" : `${l.rects.length} ${l.rects.length === 1 ? "zonă" : "zone"}`}</span>
+      <span>${l.rects.length > 1 ? `<button data-clear="${i}" title="Șterge toate zonele">Șterge tot</button>` : ""}${l.logo ? "" : `<button data-del="${i}" title="Șterge elementul">✕</button>`}</span></div>
+    ${l.rects.length ? `<div class="zones">${l.rects.map((r, j) => `<span class="zone">#${j + 1}<button data-zone="${i}:${j}" title="Șterge zona">✕</button></span>`).join("")}</div>` : ""}
+  </li>`).join("");
   $("#layers").querySelectorAll("li").forEach((li) => li.addEventListener("click", (e) => {
-    const t = e.target;
-    if (t.dataset.del) current.layers.splice(+t.dataset.del, 1), (current.active = 0);
-    else if (t.dataset.undo) current.layers[+t.dataset.undo].rects.pop();
+    const t = e.target.closest("button");
+    if (t?.dataset.del) { current.layers.splice(+t.dataset.del, 1); current.active = 0; }
+    else if (t?.dataset.clear) current.layers[+t.dataset.clear].rects = [];
+    else if (t?.dataset.zone) { const [i, j] = t.dataset.zone.split(":").map(Number); current.layers[i].rects.splice(j, 1); }
     else current.active = +li.dataset.i;
     renderLayers(); draw();
   }));
@@ -252,7 +265,7 @@ canvas.addEventListener("pointermove", (e) => { if (drag) { drag.b = pos(e); dra
 canvas.addEventListener("pointerup", () => {
   if (!drag) return;
   const r = normRect(drag.a, drag.b);
-  if (r.w > 4 && r.h > 4) current.layers[current.active].rects.push(r);
+  if (r.w > 2 && r.h > 2) current.layers[current.active].rects.push(r);
   drag = null; renderLayers(); draw();
 });
 const normRect = (a, b) => ({ x: Math.round(Math.min(a.x, b.x)), y: Math.round(Math.min(a.y, b.y)), w: Math.round(Math.abs(a.x - b.x)), h: Math.round(Math.abs(a.y - b.y)) });
@@ -264,7 +277,8 @@ function draw() {
   const lw = Math.max(2, canvas.width / 300);
   current.layers.forEach((l, i) => {
     for (const r of l.rects) {
-      if (l.logo) { ctx.fillStyle = MASK; ctx.fillRect(r.x, r.y, r.w, r.h); }
+      if (l.logo) { ctx.fillStyle = MASK; ctx.fillRect(r.x, r.y, r.w, r.h);
+        if (i === current.active) { ctx.strokeStyle = "#e4572e"; ctx.lineWidth = lw; ctx.strokeRect(r.x, r.y, r.w, r.h); } }
       else { ctx.strokeStyle = COLORS[i % COLORS.length]; ctx.lineWidth = lw; ctx.setLineDash([lw * 3, lw * 2]); ctx.strokeRect(r.x, r.y, r.w, r.h); ctx.setLineDash([]); }
     }
   });

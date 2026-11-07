@@ -208,3 +208,18 @@ table.kpis td:last-child { text-align: right; white-space: nowrap; }
 .compact .viz { margin-top: 1rem; }
 .full-details { margin-top: 1rem; border-top: 1px dashed var(--line); padding-top: 1rem; }
 @media (max-width: 700px) { table.kpis th { white-space: normal; } table.kpis td:last-child { white-space: normal; text-align: left; } }
+
+.canvas-col { min-width: 0; }
+.drawbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; margin-bottom: 0.5rem; }
+.db-lbl { font-size: 0.8rem; color: var(--muted); margin-right: 0.2rem; }
+.db-chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.65rem; border-radius: 999px; font-size: 0.82rem; }
+.db-chip.on { border-color: var(--accent); background: #fdf0ec; font-weight: 600; box-shadow: 0 0 0 1px var(--accent); }
+.db-chip .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.db-chip .cnt { font-size: 0.72rem; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 0 0.4rem; }
+.layers li { display: block; }
+.ly-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.ly-head button { margin-left: 0.25rem; }
+.zones { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.4rem; }
+.zone { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.72rem; background: var(--bg); border-radius: 999px; padding: 0.05rem 0.15rem 0.05rem 0.5rem; }
+.zone button { border: 0; background: transparent; padding: 0 0.3rem; font-size: 0.7rem; color: var(--muted); }
+.zone button:hover { color: var(--bad); }
