@@ -170,3 +170,32 @@ table.apa.kv th { width: 55%; font-weight: 500; color: var(--muted); }
   .ci-row, .frow, .axis, .axis.f, .srow, .drow { grid-template-columns: 100px 1fr 54px; }
   .frow .fval .dx { display: none; }
 }
+
+/* rezumat simplu */
+.verdict { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; padding: 0.9rem 1.1rem; border-radius: 10px; margin: 0.5rem 0 0.75rem; }
+.verdict.good { background: #e2f4ea; color: #1d6b40; }
+.verdict.warn { background: #fdf3dc; color: #6b4a00; }
+.verdict.bad { background: #fbe6e9; color: #8a1c2b; }
+.crit-note { font-size: 0.85rem; color: #8a1c2b; margin: -0.25rem 0 0.75rem; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 1rem; }
+@media (max-width: 760px) { .tiles { grid-template-columns: 1fr; } }
+.tile { background: var(--bg); border-radius: 10px; padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.2rem; }
+.t-lbl { font-size: 0.78rem; color: var(--muted); }
+.t-val { font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+.t-val.sm { font-size: 1.1rem; line-height: 1.3; padding-top: 0.3rem; }
+.t-sub { font-size: 0.78rem; color: var(--muted); }
+.chip { display: inline-block; padding: 0 0.45rem; border-radius: 999px; font-weight: 600; font-size: 0.72rem; }
+.chip.good { background: #e2f4ea; color: var(--good); } .chip.warn { background: #fdf3dc; color: var(--warn); } .chip.bad { background: #fbe6e9; color: var(--bad); }
+.sum-text { line-height: 1.55; margin: 0 0 1rem; }
+.sum-block h3, .todo h3 { margin: 0 0 0.5rem; }
+ul.plain { list-style: none; padding: 0; margin: 0 0 1rem; display: grid; gap: 0.4rem; }
+ul.plain li { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.55rem 0.75rem; border-radius: 8px; background: var(--bg); line-height: 1.4; font-size: 0.92rem; }
+ul.plain .ic { flex: 0 0 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; color: #fff; background: var(--muted); }
+ul.plain li.good .ic { background: var(--good); } ul.plain li.bad .ic { background: var(--bad); } ul.plain li.warn .ic { background: var(--warn); }
+.todo { background: #fdf0ec; border-radius: 10px; padding: 0.9rem 1.1rem; margin-bottom: 0.75rem; }
+.todo p { margin: 0; line-height: 1.5; }
+.small { font-size: 0.75rem; }
+.details-toggle { text-align: center; margin: 1rem 0 0.5rem; }
+button.ghost { background: transparent; border: 1px solid var(--ink); padding: 0.6rem 1.2rem; border-radius: 999px; font-weight: 600; }
+.stats-details { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
+ul.plain li { color: var(--ink); font-size: 0.92rem; }

@@ -1,10 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071240";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071247";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071240";
+const APP_VERSION = "202611071247";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -398,7 +398,18 @@ async function showResult(el, analysisId, controlId) {
   if (a.status === "error") { el.innerHTML = `<h2>Analiză eșuată</h2><p class="err">${esc(a.error)}</p>`; return; }
   if (!s) { el.innerHTML = `<h2>Analiză în curs</h2><p class="muted">Status: ${esc(a.status)}</p>`; return; }
 
-  if (s.version === 2) { el.innerHTML = statsView({ a, s, vs, imp, target, ctrl }); return; }
+  if (s.version === 2) {
+    el.innerHTML = summaryView({ a, s, imp, target }) +
+      `<div class="details-toggle"><button type="button" class="ghost" data-toggle-stats>📊 Vezi analiza statistică completă</button></div>
+       <div class="stats-details hidden">${statsView({ a, s, vs, imp, target, ctrl })}</div>`;
+    const btn = el.querySelector("[data-toggle-stats]"), box = el.querySelector(".stats-details");
+    btn.addEventListener("click", () => {
+      const open = box.classList.toggle("hidden") === false;
+      btn.textContent = open ? "Ascunde analiza statistică" : "📊 Vezi analiza statistică completă";
+      if (open) box.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return;
+  }
   el.innerHTML = `
     <h2>${esc(target)} — ${esc(a.ads.title ?? "reclamă")}</h2>
     <div class="grid2">
@@ -515,6 +526,63 @@ function reportHtml(report) {
   if (!r || typeof r !== "object") return `<div class="report">${esc(report)}</div>`;
   return `<div class="report-sections">${REPORT_SECTIONS.filter(([k]) => r[k]).map(([k, t]) =>
     `<section class="rs ${k}"><h4>${t}</h4><p>${esc(r[k])}</p></section>`).join("")}</div>`;
+}
+
+// Rezumat pe înțelesul oricui: verdict, 3 cifre, ce funcționează / ce încurcă, ce să faci
+function summaryView({ a, s, imp, target }) {
+  const P = s.profile ?? {};
+  let rep = {};
+  try { rep = JSON.parse(a.report) || {}; } catch {}
+  const critic = (s.alerts ?? []).find((x) => x.level === "critic");
+  const conf = Object.entries(s.confusion ?? {}).sort((x, y) => y[1].mean - x[1].mean)[0];
+  const att = s.attribution ?? 0, ci = s.attribution_ci ?? [NaN, NaN];
+  const width = Number.isFinite(ci[0]) ? ci[1] - ci[0] : 1;
+  const certainty = s.above_chance && width < 0.3 ? ["sigur", "good"] : s.above_chance ? ["orientativ", "warn"] : ["nesigur", "bad"];
+
+  let verdict, tone;
+  if (critic) { verdict = "Rezultat nevalid: numele brandului se vede încă în reclamă"; tone = "bad"; }
+  else if (conf && conf[1].mean > att) { verdict = `Reclama e confundată cu ${conf[0]}`; tone = "bad"; }
+  else if (att >= 0.6 && s.above_chance) { verdict = `Reclama e recunoscută ca ${target} și fără logo`; tone = "good"; }
+  else if (s.above_chance) { verdict = `Reclama e recunoscută parțial ca ${target}`; tone = "warn"; }
+  else { verdict = `Fără logo, reclama nu e recunoscută ca ${target}`; tone = "bad"; }
+
+  const sim = s.similarity;
+  const distinct = sim?.generic == null ? ["—", ""] : sim.generic ? ["Seamănă cu restul categoriei", "warn"] : ["Se distinge de categorie", "good"];
+
+  const plain = (i) => {
+    const pp = Math.round(Math.abs(i.delta) * 100), st = i.stats ?? {};
+    switch (i.diagnosis) {
+      case "asset_puternic": return ["good", `<b>${esc(i.element)}</b> te face recognoscibil: fără el, recunoașterea scade cu ${pp} puncte.`];
+      case "tradator": return ["bad", `<b>${esc(i.element)}</b> te face să semeni cu ${esc(st.top_competitor ?? "un concurent")}${st.top_pull ? ` (+${Math.round(st.top_pull * 100)} puncte spre el)` : ""}.`];
+      case "decor": return ["neutral", `<b>${esc(i.element)}</b> nu contează pentru recunoaștere.`];
+      case "neconcludent": return ["warn", `<b>${esc(i.element)}</b> pare să ${i.delta >= 0 ? "ajute" : "încurce"} (${pp} puncte), dar datele nu sunt încă suficiente ca să fim siguri.`];
+      default: return ["neutral", `<b>${esc(i.element)}</b> are un efect mic asupra recunoașterii.`];
+    }
+  };
+  const items = imp.map(plain);
+  const icon = { good: "✓", bad: "✕", warn: "?", neutral: "–" };
+  const elementsBlock = items.length ? `<div class="sum-block"><h3>Ce funcționează și ce încurcă</h3>
+    <ul class="plain">${items.map(([t, h]) => `<li class="${t}"><span class="ic">${icon[t]}</span><span>${h}</span></li>`).join("")}</ul></div>` : "";
+  const todo = critic
+    ? "Acoperă cu dreptunghiul Logo și textul care numește brandul (de exemplu textele legale mici) și rulează din nou analiza."
+    : rep.recomandare || "";
+
+  return `
+    <h2>${esc(target)} — ${esc(a.ads.title ?? "reclamă")}</h2>
+    <div class="verdict ${tone}">${esc(verdict)}</div>
+    ${critic ? `<p class="crit-note">${esc(critic.text)}</p>` : ""}
+    <div class="tiles">
+      <div class="tile"><span class="t-lbl">Recunoaștere fără logo</span><span class="t-val">${pct(att)}</span>
+        <span class="t-sub">din panel îl ghicește corect · <span class="chip ${certainty[1]}">rezultat ${certainty[0]}</span></span></div>
+      <div class="tile"><span class="t-lbl">Cel mai des confundat cu</span><span class="t-val">${conf ? esc(conf[0]) : "—"}</span>
+        <span class="t-sub">${conf ? `${pct(conf[1].mean)} din panel` : ""}</span></div>
+      <div class="tile"><span class="t-lbl">Cât de distinctă e vizual</span><span class="t-val sm">${esc(distinct[0])}</span>
+        <span class="t-sub">${sim?.nearest_brand ? `cel mai apropiat: ${esc(sim.nearest_brand)}` : ""}</span></div>
+    </div>
+    ${rep.sinteza && !critic ? `<p class="sum-text">${esc(rep.sinteza)}</p>` : ""}
+    ${elementsBlock}
+    ${todo ? `<div class="todo"><h3>Ce să faci</h3><p>${esc(todo)}</p></div>` : ""}
+    <p class="muted small">Pe baza a ${P.n_per_variant ?? "—"} evaluări AI pe variantă${P.leak?.rate ? "" : ""}. Un pre-test rapid, nu un panel cu oameni.</p>`;
 }
 
 function statsView({ a, s, vs, imp, target, ctrl }) {
