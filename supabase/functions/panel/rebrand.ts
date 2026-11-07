@@ -184,6 +184,8 @@ export async function rebrandImage(d: Deps, rebrandId: string, i: number) {
   if (!rb) throw new Error("Rebrandingul nu există.");
   const dir = rb.result?.directii?.[i];
   if (!dir) throw new Error("Direcția nu există.");
+  // Fără cheie, generatorul gratuit desenează de la zero; nu folosim asta: reclama nouă trebuie să pornească de la cea originală
+  if (!POLL_KEY()) return { need_key: true };
   const { data: base } = await d.supabase.from("variants").select("image_path").eq("analysis_id", rb.analysis_id).eq("kind", "base").single();
   const baseImg = await d.inlineImage(base.image_path);
   const baseUrl = d.supabase.storage.from(d.bucket).getPublicUrl(base.image_path).data.publicUrl;

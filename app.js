@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071405";
+const APP_VERSION = "202611071425";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -810,7 +810,7 @@ function renderBriefForm(panel, ctx, { rival, assets }) {
     </div></div>
     <div class="rb-step"><span class="rb-num">3</span><div>
       <h3>Generează</h3>
-      <label class="inline"><input type="checkbox" data-images checked /> generează reclamele noi ca imagini (AI gratuit, FLUX)</label>
+      <label class="inline"><input type="checkbox" data-images checked /> editează reclama cu AI (pornind de la imaginea ta)</label>
       <button type="button" class="primary big" data-go>✨ Generează 3 direcții de rebranding</button>
       <div class="muted" data-go-status></div>
     </div></div>`;
@@ -875,7 +875,26 @@ function renderBriefForm(panel, ctx, { rival, assets }) {
 // păstrând detaliile și zonele gri ale măștii neatinse). Rezultatul poate fi testat în panel ca orice variantă.
 const hexRgb = (h) => { const m = String(h).replace("#", "").match(/^([0-9a-f]{6})$/i); if (!m) return null; const n = parseInt(m[1], 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
 const lum = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
-async function recolorPreview(url, hexes) {
+// Desenează headline-ul nou peste partea de sus a reclamei, pe o bandă în culoarea cea mai închisă a direcției
+function drawHeadline(x, w, h, text, dark, light) {
+  if (!text) return;
+  const band = Math.round(h * 0.2);
+  const g = x.createLinearGradient(0, 0, 0, band * 1.35);
+  const [r, gg, b] = dark;
+  g.addColorStop(0, `rgba(${r},${gg},${b},0.94)`); g.addColorStop(0.75, `rgba(${r},${gg},${b},0.85)`); g.addColorStop(1, `rgba(${r},${gg},${b},0)`);
+  x.fillStyle = g; x.fillRect(0, 0, w, band * 1.35);
+  const words = text.toUpperCase().split(/\s+/);
+  let size = Math.round(band * 0.42), lines;
+  const wrap = () => { lines = []; let cur = "";
+    for (const wd of words) { const t = cur ? cur + " " + wd : wd; x.font = `800 ${size}px Inter, Helvetica, Arial, sans-serif`;
+      if (x.measureText(t).width > w * 0.86 && cur) { lines.push(cur); cur = wd; } else cur = t; }
+    if (cur) lines.push(cur); };
+  do { wrap(); if (lines.length * size * 1.08 <= band * 0.9) break; size -= 2; } while (size > 12);
+  x.fillStyle = `rgb(${light.join(",")})`; x.textAlign = "center"; x.textBaseline = "middle";
+  const y0 = band / 2 - ((lines.length - 1) * size * 1.08) / 2;
+  lines.forEach((ln, k) => x.fillText(ln, w / 2, y0 + k * size * 1.08));
+}
+async function recolorPreview(url, hexes, headline = "") {
   const pal = hexes.map(hexRgb).filter(Boolean).sort((x, y) => lum(x) - lum(y));
   if (pal.length < 2) return null;
   const img = await loadImage(url);
@@ -893,6 +912,8 @@ async function recolorPreview(url, hexes) {
     }
   }
   x.putImageData(d, 0, 0);
+  const lightest = pal[pal.length - 1], darkest = pal[0];
+  drawHeadline(x, c.width, c.height, headline, darkest, lum(lightest) > 170 ? lightest : [255, 255, 255]);
   return new Promise((res) => c.toBlob(res, "image/png"));
 }
 
@@ -922,6 +943,12 @@ async function genImages(box, rbId, r, images, baseUrl) {
       st.textContent = `Desenez reclama nouă ${done + failed + 1} / ${todo.length}: „${name}”…`;
       try {
         const out = await invoke({ action: "rebrand_image", rebrand_id: rbId, index: i });
+        if (out?.need_key) {
+          st.innerHTML = "Reclamele noi sunt făcute direct pe reclama ta (paletă și headline nou). Pentru o editare AI a imaginii originale " +
+            "(scenă, sticlă, lumină) adaugă în Supabase secretul <b>POLLINATIONS_KEY</b> (cheie gratuită de pe enter.pollinations.ai).";
+          if (btn) btn.classList.add("hidden");
+          return;
+        }
         if (out?.retry_after) {
           for (let t = Math.ceil(out.retry_after) + 2; t > 0; t--) {
             st.textContent = `Generatorul gratuit face o imagine la 45 s. Următoarea („${name}”) pornește în ${t} s…`;
@@ -972,8 +999,8 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
         <details><summary>Prompt pentru imagine</summary><p class="small">${esc(d.prompt_imagine)}</p>
           <button type="button" class="ghost sm" data-copy="${esc(d.prompt_imagine)}">Copiază promptul</button></details>
       </div></div>`).join("")}</div>
-    <div class="gen-row"><button type="button" class="ghost${(r.directii ?? []).every((_, i) => images[i]) ? " hidden" : ""}" data-gen>🎨 Desenează reclamele noi cu AI (gratuit)</button>
-      <span class="muted small" data-gen-status>${(r.directii ?? []).every((_, i) => images[i]) ? "" : "Până atunci vezi o previzualizare cu paleta nouă."}</span></div>
+    <div class="gen-row"><button type="button" class="ghost${(r.directii ?? []).every((_, i) => images[i]) ? " hidden" : ""}" data-gen>🎨 Editează reclama cu AI</button>
+      <span class="muted small" data-gen-status>${(r.directii ?? []).every((_, i) => images[i]) ? "" : "Până atunci vezi reclama ta cu paleta și headline-ul nou."}</span></div>
     <div class="ab"><button type="button" class="primary big" data-ab>▶ Testează direcțiile în panel (A/B)</button>
       <div class="muted small">Originalul și fiecare direcție trec prin același panel orb; câștigă varianta recunoscută cel mai bine.</div>
       <div class="muted" data-ab-status></div><div data-ab-out></div></div>
@@ -988,11 +1015,11 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
     if (images[i] || !(d.culori?.length >= 2) || !baseUrl) return;
     const ph = box.querySelector(`[data-ph="${i}"]`);
     try {
-      const blob = await recolorPreview(baseUrl, d.culori);
+      const blob = await recolorPreview(baseUrl, d.culori, d.text_nou);
       if (!blob) { if (ph) ph.textContent = "Fără imagine"; return; }
       previews[i] = blob;
       if (images[i]) return;
-      setBA(box, i, baseUrl, URL.createObjectURL(blob), "paleta nouă (previzualizare)");
+      setBA(box, i, baseUrl, URL.createObjectURL(blob), "pe reclama ta: paletă + text nou");
     } catch { if (ph && !images[i]) ph.textContent = "Previzualizarea nu a putut fi generată"; }
   });
   const ab = box.querySelector("[data-ab]");
