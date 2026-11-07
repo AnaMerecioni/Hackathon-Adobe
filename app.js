@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071545";
+const APP_VERSION = "202611071550";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -1196,8 +1196,13 @@ async function runFaceOff(box, r, rbId, btn) {
   const names = ["Reclama actuală", ...(r.directii ?? []).map((d) => d.titlu)];
   btn.disabled = true; btn.textContent = "Panelul e în desfășurare…";
   try {
-    st.textContent = "Caut pe internet ce spun cumpărătorii reali și construiesc eșantionul pe cotele populației…";
-    const setup = await invoke({ action: "face_off_setup", rebrand_id: rbId, n: 12 });
+    st.textContent = "Verific modelele disponibile…";
+    const prov = await invoke({ action: "providers" }).catch(() => ({}));
+    const slow = !!prov.slow, N = slow ? 6 : 12;
+    st.textContent = slow
+      ? "Mod gratuit fără cheie (un răspuns la ~45 s): panel de 6 persoane, durează câteva minute. Cu GROQ_API_KEY în Supabase merge în sub un minut."
+      : "Caut pe internet ce spun cumpărătorii reali și construiesc eșantionul pe cotele populației…";
+    const setup = await invoke({ action: "face_off_setup", rebrand_id: rbId, n: N });
     out.innerHTML = `<div class="fo-live">
       <div class="fo-sample"><b>Eșantion: ${setup.personas.length} persoane</b> · ${esc(setup.metoda)}
         <div class="seg-row">${(setup.segmente ?? []).map((g) => `<span class="chip">${esc(g.nume)} · ${Math.round((g.pondere ?? 0) * 100)}%</span>`).join("")}</div>
@@ -1208,12 +1213,13 @@ async function runFaceOff(box, r, rbId, btn) {
           <div class="muted small">${esc(p.tipar)}</div><div class="lp-say"><span class="typing"><i></i><i></i><i></i></span></div></div></div>`).join("")}</div>
       <div data-fo-agg></div></div>`;
     const answers = []; let done = 0, next = 0;
-    st.textContent = `Panelul răspunde: 0 / ${setup.personas.length}`;
+    const note = slow ? " · mod gratuit, ~45 s / persoană" : "";
+    st.textContent = `Panelul răspunde: 0 / ${setup.personas.length}${note}`;
     const one = async (i) => {
       const card = out.querySelector(`[data-p="${i}"]`); card.classList.remove("waiting"); card.classList.add("talking");
       card.scrollIntoView({ behavior: "smooth", block: "nearest" });
       let a = null;
-      for (let t = 0; t < 2 && !a; t++) { try { a = await invoke({ action: "face_off_eval", rebrand_id: rbId, index: i }); } catch { /* reîncerc o dată */ } }
+      for (let t = 0; t < 2 && !a; t++) { try { a = await invoke({ action: "face_off_eval", rebrand_id: rbId, index: i }); } catch (err) { card.querySelector(".lp-say").innerHTML = `<span class="muted small">${esc(err.message.slice(0, 90))} · reîncerc…</span>`; } }
       card.classList.remove("talking");
       if (!a) { card.querySelector(".lp-say").innerHTML = `<span class="muted small">nu a răspuns</span>`; return; }
       answers.push(a);
@@ -1224,9 +1230,10 @@ async function runFaceOff(box, r, rbId, btn) {
       q.textContent = text;
       say.insertAdjacentHTML("beforeend", `<div class="lp-tags"><span class="chip good">alege: ${esc(names[a.favorit] ?? "—")}</span>
         ${a.ce_schimbi ? `<span class="chip warn">ar schimba: ${esc(a.ce_schimbi)}</span>` : ""}</div>`);
-      st.textContent = `Panelul răspunde: ${++done} / ${setup.personas.length}`;
+      st.textContent = `Panelul răspunde: ${++done} / ${setup.personas.length}${note}`;
     };
-    await Promise.all([0, 1].map(async () => { while (next < setup.personas.length) await one(next++); }));
+    await Promise.all((slow ? [0] : [0, 1]).map(async () => { while (next < setup.personas.length) await one(next++); }));
+    if (!answers.length) throw new Error("Nicio persoană n-a răspuns. Furnizorii gratuiți sunt la limită; încearcă peste un minut sau adaugă GROQ_API_KEY.");
     st.textContent = "Calculez rezultatul ponderat…";
     const res = await invoke({ action: "face_off_save", rebrand_id: rbId, answers });
     r.face_off = res;

@@ -139,6 +139,13 @@ function toChat(body: any, model: string, withImages: boolean) {
 async function chatCall(url: string, key: string, payload: any, label: string): Promise<string> {
   for (let attempt = 0; attempt < 4; attempt++) {
     const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(payload) });
+    if (res.status === 402) {
+      // Pollinations gratuit: „1 reply every 45 seconds per IP. Retry after 45s” → așteptăm o dată, apoi renunțăm
+      const t = await res.text();
+      const wait = Number(t.match(/Retry after (\d+)/i)?.[1] ?? 45);
+      if (attempt >= 1 || !/FREE_LIMIT|Retry after/i.test(t)) throw new Error(`${label}: limita gratuită (un răspuns la ${wait} s).`);
+      await new Promise((r) => setTimeout(r, Math.min(wait + 1, 50) * 1000)); continue;
+    }
     if (res.status === 429 || res.status >= 500) {
       const ra = Number(res.headers.get("retry-after")) || 2 * 2 ** attempt;
       await new Promise((r) => setTimeout(r, Math.min(ra, 20) * 1000)); continue;
@@ -649,8 +656,19 @@ Deno.serve(async (req) => {
     ? await supabase.from("team_members").select("email").eq("email", email).maybeSingle()
     : { data: null };
   if (!member) return json({ error: "Acces doar pentru echipă. Autentifică-te în aplicație." }, 401);
-  if (body.action === "providers") return json({ gemini: !!geminiKey(), gemini_blocked: Date.now() < geminiBlockedUntil,
-    groq: !!env("GROQ_API_KEY"), deepseek: !!env("DEEPSEEK_API_KEY"), groq_model: GROQ_MODEL() });
+  if (body.action === "providers") {
+    // verificăm rapid dacă Gemini mai are cotă (o cerere minusculă)
+    let geminiOk = false;
+    if (geminiKey() && Date.now() >= geminiBlockedUntil) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, { method: "POST",
+        headers: { "x-goog-api-key": geminiKey(), "content-type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text: "ok" }] }], generationConfig: { maxOutputTokens: 1 } }) });
+      geminiOk = r.ok;
+      if (r.status === 429) geminiBlockedUntil = Date.now() + 10 * 60_000;
+    }
+    const groq = !!env("GROQ_API_KEY"), deepseek = !!env("DEEPSEEK_API_KEY");
+    return json({ gemini: geminiOk, groq, deepseek, groq_model: GROQ_MODEL(), slow: !geminiOk && !groq && !deepseek });
+  }
   try {
     if (body.action === "diag") {
       // diagnostic fără a expune cheia: lungime, prefix, caractere suspecte
