@@ -177,11 +177,41 @@ async function runVariant(variantId: string) {
     if (memory.length) memory.unshift({ text: "Ai văzut în trecut aceste reclame, etichetate cu brandul lor:" });
   }
 
-  const system =
-    "Ești un evaluator dintr-un panel orb de recunoaștere a brandului. Primești o reclamă din care logo-ul și numele " +
-    "brandului au fost acoperite cu culoare plată. Zonele acoperite NU sunt un indiciu. Estimează pentru fiecare candidat " +
-    "probabilitatea ca reclama să fie a lui, pe baza elementelor vizuale (culori, personaje, tipografie, layout, produs, ton). " +
-    `Folosește „${UNKNOWN}” pentru nesiguranță reală. Probabilitățile trebuie să însumeze 1. Răspunde doar cu JSON conform schemei.`;
+  // Elementele comune categoriei (ex. la apă: sticla, apa) apar la toți concurenții, deci nu deosebesc brandurile
+  const generic: string[] = (analysis.generic_elements ?? []).map((x: string) => x.trim()).filter(Boolean);
+  const genericTxt = generic.length ? generic.join(", ") : "produsul în sine și ambalajul tipic al categoriei";
+  const system = [
+    `ROL: Ești un evaluator dintr-un panel orb de recunoaștere a brandului. Categoria de produs este „${analysis.category}”.`,
+    "",
+    "CE PRIMEȘTI:",
+    memory.length
+      ? "- Reclame văzute anterior, fiecare etichetată cu brandul ei. Acestea sunt experiența ta cu brandurile din categorie."
+      : "- Nu primești exemple anterioare; folosește doar ce vezi în reclamă.",
+    "- O reclamă de evaluat, din care logo-ul și numele brandului au fost acoperite cu dreptunghiuri gri plate.",
+    "- O listă închisă de candidați, inclusiv „nu știu”.",
+    "",
+    "CE FACI:",
+    `1. Cauți doar elementele care pot deosebi un brand de altul în categoria „${analysis.category}”: paleta de culori proprie, ` +
+      "personaje sau mascote, tipografia, stilul fotografic și decorul, compoziția și layout-ul, forma și designul specific " +
+      "al etichetei sau ambalajului (nu simpla prezență a produsului), sloganul și tonul.",
+    memory.length
+      ? "2. Compari aceste elemente cu reclamele din memorie și cauți potriviri concrete (aceeași culoare, același personaj, același stil)."
+      : "2. Judeci doar pe baza elementelor distinctive vizibile.",
+    "3. Împarți probabilitatea între candidați; suma trebuie să fie exact 1.",
+    "4. Pui la „nu știu” partea pentru care nu ai indicii distinctive. Dacă nu vezi niciun indiciu distinctiv, „nu știu” primește cel puțin 0.6.",
+    "5. În „cues” scrii 1–6 indicii scurte (2–4 cuvinte, în română) care ți-au influențat cu adevărat decizia, de ex. „etichetă verde”, „munți înzăpeziți”.",
+    "",
+    "CE NU FACI:",
+    `- Nu folosești ca indiciu elementele comune întregii categorii „${analysis.category}”: ${genericTxt}. ` +
+      "Ele apar la toți concurenții și nu deosebesc brandurile; nu le treci nici în „cues”.",
+    "- Nu încerci să ghicești ce e sub zonele gri și nu tratezi forma, mărimea sau poziția lor ca indiciu.",
+    "- Nu folosești fragmente de text din logo sau din numele brandului rămase vizibile.",
+    "- Nu adaugi branduri care nu sunt în lista de candidați.",
+    memory.length
+      ? "- Nu te bazezi pe faima brandului sau pe ce știi despre el din afara exemplelor primite; un brand cunoscut nu primește automat mai multă probabilitate."
+      : "- Nu dai mai multă probabilitate unui brand doar pentru că e mai cunoscut.",
+    "- Nu scrii nimic în afara JSON-ului cerut.",
+  ].join("\n");
   const schema = {
       type: "object",
       properties: {
@@ -193,7 +223,7 @@ async function runVariant(variantId: string) {
             required: ["brand", "p"],
           },
         },
-        cues: { type: "array", items: { type: "string" }, description: "Indicii vizuale scurte, în română, ex. „verde închis”, „mascota”." },
+        cues: { type: "array", items: { type: "string" }, description: "1–6 indicii vizuale distinctive, scurte, în română (fără elementele comune categoriei)." },
       },
       required: ["probabilities", "cues"],
   };
@@ -204,7 +234,7 @@ async function runVariant(variantId: string) {
     const order = shuffle(candidatesAll); // amestecăm ordinea la fiecare evaluare (bias de poziție)
     const parts = [
       ...memory,
-      { text: `Reclama de evaluat (logo mascat). Candidați, în această ordine: ${order.map((c) => `„${c}”`).join(", ")}.` },
+      { text: `Reclama de evaluat (categoria „${analysis.category}”, logo mascat). Candidați, în această ordine: ${order.map((c) => `„${c}”`).join(", ")}.` },
       testImage,
     ];
     const text = await gemini({
@@ -345,7 +375,7 @@ async function finalize(analysisId: string) {
     element: v.element, attribution: v.attribution, sd: v.attribution_sd, lift: v.attribution - base.attribution,
   }));
   const summary = {
-    target, thresholds: T, model: MODEL, n_evals: a.n_evals, use_memory: a.use_memory,
+    target, category: a.category, generic_elements: a.generic_elements ?? [], thresholds: T, model: MODEL, n_evals: a.n_evals, use_memory: a.use_memory,
     attribution: base.attribution, attribution_sd: base.attribution_sd, misattribution,
     generic: similarity?.generic ?? null, similarity,
     elements: impacts.map(({ analysis_id, _top, ...r }) => ({ ...r, top_competitor: _top[0], top_pull: _top[1] })),
@@ -357,7 +387,8 @@ async function finalize(analysisId: string) {
       "nu inventa valori. Procentele cu 0 zecimale, Δ cu 2 zecimale. Structură: 1) atribuire și cu cine e confundat brandul; " +
       "2) elementele trădătoare și ce se întâmplă fără ele; 3) asset-urile reale; 4) decorul; 5) variantele generate (dacă există); " +
       "Dacă similarity.generic e true, spune că reclama seamănă cu restul categoriei și cu cine seamănă cel mai mult (nearest_brand). " +
-      "6) o recomandare concretă. Maxim 180 de cuvinte, fără titluri markdown și fără asteriscuri." }] },
+      "6) o recomandare concretă. Nu recomanda schimbarea elementelor comune categoriei (generic_elements): sunt obligatorii în categorie și nu deosebesc brandul; " +
+      "concentrează recomandarea pe elementele distinctive. Maxim 180 de cuvinte, fără titluri markdown și fără asteriscuri." }] },
     contents: [{ role: "user", parts: [{ text: `Metrici (JSON):\n${JSON.stringify(summary)}` }] }],
     generationConfig: { maxOutputTokens: 1500 },
   });

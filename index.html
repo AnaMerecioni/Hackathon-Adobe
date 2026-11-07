@@ -5,7 +5,7 @@
   <meta http-equiv="Cache-Control" content="no-cache" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Fără logo — laboratorul de amprentă a brandului</title>
-  <link rel="stylesheet" href="styles.css?v=202611071137" />
+  <link rel="stylesheet" href="styles.css?v=202611071221" />
 </head>
 <body>
   <header>
@@ -89,6 +89,9 @@
             <hr />
             <label>Variante generate (deja mascate, opțional)
               <input id="gen-files" type="file" accept="image/png,image/jpeg,image/webp" multiple /></label>
+            <label>Elemente comune categoriei — nu se analizează
+              <input id="generic" placeholder="ex. sticla de apă, apa, picături" />
+              <span class="hint">Apar la toți concurenții, deci panelul e instruit să le ignore. Separă cu virgulă.</span></label>
             <label>Evaluări per variantă <input id="n-evals" type="number" min="1" max="30" value="10" /></label>
             <label class="inline"><input type="checkbox" id="use-memory" checked /> memorie însămânțată</label>
             <label class="inline"><input type="checkbox" id="control" /> + control fără memorie (doar bază)</label>
@@ -118,6 +121,6 @@
 
   <div id="lightbox" class="lightbox hidden"><img alt="" /><div class="lb-cap"></div></div>
   <div id="tip" class="tip hidden"></div>
-  <script type="module" src="app.js?v=202611071137"></script>
+  <script type="module" src="app.js?v=202611071221"></script>
 </body>
 </html>

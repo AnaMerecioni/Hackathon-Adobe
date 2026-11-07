@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071137";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071221";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = (s) => document.querySelector(s);
@@ -154,6 +154,23 @@ $("#ad-form").addEventListener("submit", async (e) => {
 
 $("#start-cta").addEventListener("click", () => goAnalyze());
 
+// ---------- elemente comune categoriei (ignorate de panel) ----------
+const GENERIC_DEFAULTS = {
+  apa: "sticla de apă, apa / lichidul, picături de apă, paharul cu apă",
+  "apă": "sticla de apă, apa / lichidul, picături de apă, paharul cu apă",
+  bere: "sticla sau doza de bere, spuma, halba / paharul, ciocnitul paharelor",
+  cafea: "ceașca, boabele de cafea, aburul",
+  suc: "sticla sau doza, paharul, cuburile de gheață",
+  ciocolata: "tableta de ciocolată, bucățile rupte",
+  "ciocolată": "tableta de ciocolată, bucățile rupte",
+};
+function genericFor(cat) {
+  try { const v = localStorage.getItem(`fl-generic-${cat}`); if (v != null) return v; } catch {}
+  return GENERIC_DEFAULTS[cat] ?? "";
+}
+const genericList = () => $("#generic").value.split(",").map((x) => x.trim()).filter(Boolean);
+$("#generic").addEventListener("change", () => { try { localStorage.setItem(`fl-generic-${category()}`, $("#generic").value); } catch {} });
+
 // ---------- editor de mască ----------
 const canvas = $("#canvas");
 const ctx = canvas.getContext("2d");
@@ -183,6 +200,7 @@ async function openEditor(ad) {
   }
   $("#progress").textContent = "";
   current = { ad, img, layers: [{ name: "Logo", logo: true, rects: [] }], active: 0 };
+  $("#generic").value = genericFor(category());
   canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
   $("#editor").classList.remove("hidden");
   $("#result").classList.add("hidden");
@@ -206,6 +224,11 @@ function renderLayers() {
 $("#el-add").addEventListener("click", () => {
   const name = $("#el-name").value.trim();
   if (!name || !current) return;
+  // un element comun categoriei nu are sens în ablație: nu deosebește brandurile
+  const gen = genericList().map((g) => g.toLowerCase());
+  const n = name.toLowerCase();
+  if (gen.some((g) => g.split(/[\s/]+/).some((w) => w.length > 3 && n.includes(w.slice(0, 5)))) &&
+      !confirm(`„${name}” pare un element comun categoriei „${category()}”, pe care panelul îl ignoră. Îl adaugi totuși?`)) return;
   current.layers.push({ name, hue: $("#el-hue").checked, rects: [] });
   current.active = current.layers.length - 1;
   $("#el-name").value = ""; $("#el-hue").checked = false;
@@ -288,7 +311,7 @@ async function uploadBlob(path, blob) {
 async function createAnalysis({ useMemory, withAblations }) {
   const n_evals = Math.min(30, Math.max(1, +$("#n-evals").value || 10));
   const { data: a, error } = await sb.from("analyses")
-    .insert({ ad_id: current.ad.id, category: category(), use_memory: useMemory, n_evals }).select().single();
+    .insert({ ad_id: current.ad.id, category: category(), use_memory: useMemory, n_evals, generic_elements: genericList() }).select().single();
   if (error) throw error;
   const rows = [{ kind: "base", element: null, blob: await renderVariant(null) }];
   if (withAblations) {
