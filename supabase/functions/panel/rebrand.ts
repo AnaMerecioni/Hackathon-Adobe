@@ -1,6 +1,6 @@
 // Rebranding asistat: pornește de la rezultatele analizei (similaritate, confuzie, elemente) și de la brief-ul
 // utilizatorului, și propune 3 direcții vizuale care îndepărtează reclama de concurentul cel mai apropiat.
-// Opțional generează câte o imagine pe direcție (model de imagine Gemini), ca să poată fi retestată în panel.
+// Opțional generează câte o imagine pe direcție (Pollinations: editare cu cheie, FLUX gratuit fără cheie), ca să poată fi retestată în panel.
 
 type Deps = {
   supabase: any;
@@ -43,28 +43,43 @@ export async function briefFromText(d: Deps, text: string, brand: string) {
   try { return JSON.parse(out.replace(/^```(json)?|```$/g, "")); } catch { throw new Error("Nu am putut extrage răspunsurile. Încearcă din nou."); }
 }
 
-const IMAGE_MODEL = Deno.env.get("GEMINI_IMAGE_MODEL") ?? "gemini-3.1-flash-image";
 const clip = (s: unknown, n = 400) => String(s ?? "").slice(0, n).trim();
+const POLL_KEY = () => (Deno.env.get("POLLINATIONS_KEY") ?? "").trim();
+const EDIT_MODEL = Deno.env.get("POLLINATIONS_EDIT_MODEL") ?? "black-forest-labs/flux-3-image-klein";
 
-async function generateImage(d: Deps, base: { mime_type: string; data: string }, prompt: string) {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent`, {
-    method: "POST",
-    headers: { "x-goog-api-key": d.geminiKey(), "content-type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [
-        { text: "Redesenează această reclamă după instrucțiunile de mai jos. Păstrează formatul și produsul; zonele gri plate " +
-          "sunt locul logo-ului și rămân gri plat. Nu adăuga niciun nume de brand, logo sau text lizibil.\n\n" + prompt },
-        { inline_data: base },
-      ] }],
-      generationConfig: { responseModalities: ["IMAGE"] },
-    }),
-  });
-  if (!res.ok) throw new Error(`Imagine ${res.status}: ${(await res.text()).slice(0, 240)}`);
-  const j = await res.json();
-  const part = (j?.candidates?.[0]?.content?.parts ?? []).find((p: any) => p.inlineData?.data || p.inline_data?.data);
-  const img = part?.inlineData ?? part?.inline_data;
-  if (!img) throw new Error("Modelul de imagine nu a întors nicio imagine.");
-  return { mime: img.mimeType ?? img.mime_type ?? "image/png", bytes: Uint8Array.from(atob(img.data), (c) => c.charCodeAt(0)) };
+// Dimensiunile unui PNG din antetul IHDR (variantele de bază sunt PNG), ca imaginea nouă să păstreze formatul
+function pngSize(b64: string): [number, number] | null {
+  try {
+    const bin = atob(b64.slice(0, 64));
+    if (!bin.startsWith("\x89PNG")) return null;
+    const u = (i: number) => (bin.charCodeAt(i) << 24) | (bin.charCodeAt(i + 1) << 16) | (bin.charCodeAt(i + 2) << 8) | bin.charCodeAt(i + 3);
+    return [u(16), u(20)];
+  } catch { return null; }
+}
+function fitSize(size: [number, number] | null): [number, number] {
+  const [w, h] = size ?? [1024, 1024], k = 1024 / Math.max(w, h);
+  return [Math.round((w * k) / 16) * 16, Math.round((h * k) / 16) * 16];
+}
+
+/** Generează imaginea unei direcții. Cu POLLINATIONS_KEY editează reclama originală; fără cheie, FLUX desenează după descriere. */
+async function generateImage(baseUrl: string, size: [number, number], prompt: string, seed: number) {
+  const [w, h] = fitSize(size);
+  const negative = " No logos, no brand names, no watermarks. Any headline text must be exactly the quoted text.";
+  const key = POLL_KEY();
+  const url = key
+    ? `https://gen.pollinations.ai/image/${encodeURIComponent(prompt + negative)}?model=${encodeURIComponent(EDIT_MODEL)}` +
+      `&image=${encodeURIComponent(baseUrl)}&width=${w}&height=${h}&seed=${seed}&key=${encodeURIComponent(key)}`
+    : `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt + negative)}?model=flux&width=${w}&height=${h}` +
+      `&seed=${seed}&nologo=true&private=true&enhance=false`;
+  const res = await fetch(url);
+  const type = res.headers.get("content-type") ?? "";
+  if (!res.ok || !type.startsWith("image")) {
+    const body = await res.text();
+    // limita gratuită: „1 image every 45 seconds per IP. Retry after 42s”
+    const wait = /FREE_LIMIT|Retry after/i.test(body) ? Number(body.match(/Retry after (\d+)/i)?.[1] ?? 45) : 0;
+    throw Object.assign(new Error(`Imagine ${res.status}: ${body.slice(0, 200)}`), { retryAfter: wait });
+  }
+  return { mime: type, bytes: new Uint8Array(await res.arrayBuffer()), source: key ? `editare AI (${EDIT_MODEL.split("/").pop()})` : "AI · FLUX" };
 }
 
 export async function rebrand(d: Deps, analysisId: string, briefIn: Brief, wantImages: boolean, email: string) {
@@ -102,9 +117,15 @@ export async function rebrand(d: Deps, analysisId: string, briefIn: Brief, wantI
     "2. Compari vizual reclama cu exemplele concurentului și numești concret codurile comune (culori, compoziție, tip de imagine, tipografie).",
     "3. Respecți identitatea de brand din brief: promisiunea, valorile, personalitatea, tonul, activele de păstrat, ce trebuie evitat, " +
       "constrângerile, obiectivul, publicul și nivelul de curaj. Fiecare direcție trebuie să exprime promisiunea și personalitatea brandului.",
-    "4. Propui exact 3 direcții diferite între ele: una „sigur” (ajustare fină), una „echilibrat”, una „curajos”. " +
-      "Dacă brief-ul cere o ajustare fină, chiar și direcția „curajos” rămâne recognoscibilă pentru clienții actuali.",
-    "5. Pentru fiecare direcție scrii un prompt de imagine detaliat, în română, care descrie reclama nouă (fără nume de brand, fără logo, fără text lizibil).",
+    "4. Propui exact 3 direcții, cu niveluri clare de schimbare față de reclama originală:",
+    "   - „sigur”: păstrezi produsul (sticla/ambalajul) ȘI fundalul/scena; schimbi paleta de culori, lumina și textul.",
+    "   - „echilibrat”: păstrezi produsul (sticla/ambalajul); schimbi fundalul, scena, compoziția, paleta și textul.",
+    "   - „curajos”: schimbi și designul produsului (forma etichetei, culoarea ambalajului, materialul), plus scena, compoziția și textul; " +
+      "rămân doar activele cerute de utilizator. Dacă brief-ul cere o ajustare fină, „curajos” rămâne totuși recognoscibil.",
+    "5. Pentru fiecare direcție scrii un text nou de reclamă (headline scurt, în română, fără numele brandului) care exprimă promisiunea brandului.",
+    "6. Pentru fiecare direcție scrii „prompt_imagine” în ENGLEZĂ, 70–130 de cuvinte, ca descriere completă a reclamei noi pentru un generator de imagini: " +
+      "descrii precis elementele păstrate exact cum arată în original (formă, culoare, material, poziție), apoi ce e nou (scenă, lumină, paletă cu culorile direcției, " +
+      "compoziție, stil fotografic) și headline-ul nou între ghilimele. Fără nume de brand, fără logo-uri.",
     "",
     "CE NU FACI:",
     "- Nu schimbi elementele comune categoriei (ele sunt obligatorii și nu deosebesc brandurile).",
@@ -127,8 +148,11 @@ export async function rebrand(d: Deps, analysisId: string, briefIn: Brief, wantI
         descriere: { type: "string" }, de_ce_distinct: { type: "string" },
         legatura_cu_identitatea: { type: "string", description: "Cum exprimă promisiunea și personalitatea brandului." },
         culori: { type: "array", items: { type: "string" }, description: "3–4 culori hex ale direcției, ordonate de la cea mai închisă la cea mai deschisă, diferite de ale concurentului." },
-        prompt_imagine: { type: "string" } },
-        required: ["titlu", "risc", "descriere", "de_ce_distinct", "legatura_cu_identitatea", "culori", "prompt_imagine"] } },
+        pastrat: { type: "array", items: { type: "string" }, description: "Ce rămâne neschimbat din reclama originală." },
+        schimbat: { type: "array", items: { type: "string" }, description: "Ce se schimbă concret." },
+        text_nou: { type: "string", description: "Headline-ul nou, în română, fără numele brandului." },
+        prompt_imagine: { type: "string", description: "Descriere completă în engleză pentru generatorul de imagini." } },
+        required: ["titlu", "risc", "descriere", "de_ce_distinct", "legatura_cu_identitatea", "culori", "pastrat", "schimbat", "text_nou", "prompt_imagine"] } },
       urmatorul_pas: { type: "string" },
     },
     required: ["diagnostic", "coduri_comune", "pastrezi", "schimbi", "paleta", "directii", "urmatorul_pas"],
@@ -137,7 +161,7 @@ export async function rebrand(d: Deps, analysisId: string, briefIn: Brief, wantI
   const txt = await d.gemini({
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: "user", parts }],
-    generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 4000 },
+    generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 7000 },
   });
   let result: any;
   try { result = JSON.parse(txt.replace(/^```(json)?|```$/g, "")); } catch { throw new Error("Răspunsul pentru rebranding nu a putut fi citit. Încearcă din nou."); }
@@ -148,25 +172,35 @@ export async function rebrand(d: Deps, analysisId: string, briefIn: Brief, wantI
     .insert({ analysis_id: analysisId, brief, result, created_by: email }).select().single();
   if (error) throw error;
 
-  // Imagini opționale: o variantă pe direcție, salvată ca să poată fi testată în panel
+  // Imaginile se generează separat, câte una (rebrandImage), ca să respecte limita planului gratuit
   const images: string[] = [];
-  let imageError: string | null = null;
-  if (wantImages) {
-    const baseImg = await d.inlineImage(base.image_path);
-    for (const [i, dir] of result.directii.entries()) {
-      try {
-        const img = await generateImage(d, baseImg, `${dir.titlu}. ${dir.prompt_imagine}`);
-        const path = `rebrand/${row.id}/${i}.${img.mime.includes("jpeg") ? "jpg" : "png"}`;
-        const up = await d.supabase.storage.from(d.bucket).upload(path, img.bytes, { contentType: img.mime, upsert: true });
-        if (up.error) throw up.error;
-        images[i] = path;
-      } catch (e) {
-        const m = e instanceof Error ? e.message : String(e);
-        imageError = /\b(429|403)\b/.test(m) ? "Generarea de imagini AI nu e inclusă în cota gratuită a cheii Gemini." : m;
-        break; // dacă modelul de imagine nu e disponibil, nu mai încercăm și pentru celelalte direcții
-      }
-    }
-    await d.supabase.from("rebrands").update({ images, image_error: imageError }).eq("id", row.id);
-  }
+  const imageError: string | null = null;
   return { id: row.id, result, images, image_error: imageError };
+}
+
+/** Generează imaginea direcției i pentru un rebranding salvat. La limita gratuită întoarce retry_after în secunde. */
+export async function rebrandImage(d: Deps, rebrandId: string, i: number) {
+  const { data: rb } = await d.supabase.from("rebrands").select("*").eq("id", rebrandId).single();
+  if (!rb) throw new Error("Rebrandingul nu există.");
+  const dir = rb.result?.directii?.[i];
+  if (!dir) throw new Error("Direcția nu există.");
+  const { data: base } = await d.supabase.from("variants").select("image_path").eq("analysis_id", rb.analysis_id).eq("kind", "base").single();
+  const baseImg = await d.inlineImage(base.image_path);
+  const baseUrl = d.supabase.storage.from(d.bucket).getPublicUrl(base.image_path).data.publicUrl;
+  try {
+    const img = await generateImage(baseUrl, pngSize(baseImg.data) as any, dir.prompt_imagine, 1000 + i * 17);
+    const path = `rebrand/${rebrandId}/${i}.${img.mime.includes("png") ? "png" : "jpg"}`;
+    const up = await d.supabase.storage.from(d.bucket).upload(path, img.bytes, { contentType: img.mime, upsert: true });
+    if (up.error) throw up.error;
+    // re-citim rândul ca să nu suprascriem imaginile altor direcții generate între timp
+    const { data: cur } = await d.supabase.from("rebrands").select("images,result").eq("id", rebrandId).single();
+    const images = [...(cur?.images ?? [])]; while (images.length < i) images.push(null);
+    images[i] = path;
+    const result = cur?.result ?? rb.result; result.directii[i].sursa_imagine = img.source;
+    await d.supabase.from("rebrands").update({ images, result, image_error: null }).eq("id", rebrandId);
+    return { path, source: img.source };
+  } catch (e: any) {
+    if (e?.retryAfter) return { retry_after: e.retryAfter };
+    throw e;
+  }
 }

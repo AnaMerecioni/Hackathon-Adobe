@@ -6,7 +6,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import * as S from "./stats.ts";
-import { rebrand, briefFromText } from "./rebrand.ts";
+import { rebrand, briefFromText, rebrandImage } from "./rebrand.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -541,6 +541,9 @@ Deno.serve(async (req) => {
     if (body.action === "migrate_storage") return json(await migrateStorage());
     if (body.action === "brief_from_text") {
       return json(await briefFromText({ supabase, gemini, inlineImage, geminiKey, bucket: BUCKET }, body.text ?? "", body.brand ?? "brand"));
+    }
+    if (body.action === "rebrand_image" && body.rebrand_id) {
+      return json(await rebrandImage({ supabase, gemini, inlineImage, geminiKey, bucket: BUCKET }, body.rebrand_id, Number(body.index ?? 0)));
     }
     if (body.action === "rebrand" && body.analysis_id) {
       return json(await rebrand({ supabase, gemini, inlineImage, geminiKey, bucket: BUCKET },

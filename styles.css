@@ -274,3 +274,9 @@ ol.ranking { padding-left: 1.2rem; line-height: 2; }
 ol.ranking li span { margin-left: 0.5rem; font-variant-numeric: tabular-nums; }
 ol.ranking li.orig { color: var(--muted); list-style: none; margin-left: -1.2rem; }
 .mini-pal { display: flex; height: 8px; } .mini-pal span { flex: 1; }
+.new-copy { font-weight: 700; font-size: 1rem; letter-spacing: -0.01em; margin: 0.5rem 0; }
+.ks { display: grid; gap: 0.35rem; margin: 0.5rem 0; font-size: 0.75rem; }
+.ks div { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.ks b { margin-right: 0.25rem; font-size: 0.72rem; color: var(--muted); }
+
+.gen-row{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin:.8rem 0}

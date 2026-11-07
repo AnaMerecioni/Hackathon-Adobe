@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071329";
+const APP_VERSION = "202611071520";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -806,7 +806,7 @@ function renderBriefForm(panel, ctx, { rival, assets }) {
     </div></div>
     <div class="rb-step"><span class="rb-num">3</span><div>
       <h3>Generează</h3>
-      <label class="inline"><input type="checkbox" data-images checked /> generează și imagini pentru fiecare direcție (experimental)</label>
+      <label class="inline"><input type="checkbox" data-images checked /> generează reclamele noi ca imagini (AI gratuit, FLUX)</label>
       <button type="button" class="primary big" data-go>✨ Generează 3 direcții de rebranding</button>
       <div class="muted" data-go-status></div>
     </div></div>`;
@@ -855,11 +855,11 @@ function renderBriefForm(panel, ctx, { rival, assets }) {
     const brief = Object.fromEntries(BRIEF_Q.map(([k]) => [k, val(k).value.trim()]).filter(([, v]) => v));
     const images = panel.querySelector("[data-images]").checked;
     btn.disabled = true; btn.textContent = "Generez direcțiile…";
-    st.textContent = images ? "Durează aproximativ un minut: întâi strategia, apoi imaginile." : "Durează câteva secunde.";
+    st.textContent = images ? "Întâi strategia (câteva secunde), apoi cele 3 reclame noi apar pe rând." : "Durează câteva secunde.";
     try {
       const out = await invoke({ action: "rebrand", analysis_id: ctx.analysisId, brief, images });
       const box = panel.parentElement.querySelector(".rb-result");
-      renderRebrand(box, ctx, out);
+      renderRebrand(box, ctx, { ...out, autoImages: images });
       panel.classList.add("hidden");
       box.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) { st.innerHTML = `<span class="err">${esc(err.message)}</span>`; }
@@ -892,7 +892,52 @@ async function recolorPreview(url, hexes) {
   return new Promise((res) => c.toBlob(res, "image/png"));
 }
 
-function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error }) {
+// Pune sliderul înainte/după în cardul direcției i (înlocuiește previzualizarea existentă)
+function setBA(box, i, baseUrl, afterUrl, label) {
+  const dir = box.querySelectorAll(".dir")[i]; if (!dir) return;
+  const cur = dir.querySelector(".ba, .dir-ph");
+  const html = `<div class="ba" style="--x:50%"><img src="${baseUrl}" alt="" /><img class="after" src="${afterUrl}" alt="" />
+    <input type="range" min="0" max="100" value="50" aria-label="Înainte / după" /><span class="ba-l">înainte</span><span class="ba-r">${esc(label)}</span></div>`;
+  if (cur) cur.outerHTML = html; else dir.insertAdjacentHTML("afterbegin", html);
+  const inp = dir.querySelector(".ba input");
+  inp.addEventListener("input", () => inp.parentElement.style.setProperty("--x", `${inp.value}%`));
+}
+
+// Generează reclamele noi cu AI, una câte una. Planul gratuit permite o imagine la ~45 s, așa că așteptăm cât cere serverul.
+async function genImages(box, rbId, r, images, baseUrl) {
+  const st = box.querySelector("[data-gen-status]"), btn = box.querySelector("[data-gen]");
+  const todo = (r.directii ?? []).map((_, i) => i).filter((i) => !images[i]);
+  if (!todo.length) return;
+  if (btn) btn.disabled = true;
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  let done = 0, failed = 0;
+  for (const i of todo) {
+    const name = r.directii[i].titlu;
+    let ok = false;
+    for (let attempt = 0; attempt < 5 && !ok; attempt++) {
+      st.textContent = `Desenez reclama nouă ${done + failed + 1} / ${todo.length}: „${name}”…`;
+      try {
+        const out = await invoke({ action: "rebrand_image", rebrand_id: rbId, index: i });
+        if (out?.retry_after) {
+          for (let t = Math.ceil(out.retry_after) + 2; t > 0; t--) {
+            st.textContent = `Generatorul gratuit face o imagine la 45 s. Următoarea („${name}”) pornește în ${t} s…`;
+            await sleep(1000);
+          }
+          continue;
+        }
+        images[i] = out.path; r.directii[i].sursa_imagine = out.source; ok = true; done++;
+        setBA(box, i, baseUrl, imgUrl(out.path) + `?t=${Date.now()}`, out.source ?? "AI");
+      } catch (err) { st.innerHTML = `<span class="err">„${esc(name)}”: ${esc(err.message)}</span>`; await sleep(3000); break; }
+    }
+    if (!ok) failed++;
+  }
+  st.textContent = failed
+    ? `Am desenat ${done} din ${todo.length} reclame. Pentru celelalte rămâne previzualizarea cu paleta; poți reîncerca.`
+    : `Gata: ${done} reclame noi desenate de AI. Trage de slider ca să compari cu originalul.`;
+  if (btn) { btn.disabled = false; btn.classList.toggle("hidden", !failed); btn.textContent = "🎨 Reîncearcă imaginile lipsă"; }
+}
+
+function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error, autoImages = false }) {
   const baseV = ctx.vs.find((v) => v.kind === "base");
   const baseUrl = baseV ? imgUrl(baseV.image_path) : "";
   const RISK = { sigur: "good", echilibrat: "warn", curajos: "bad" };
@@ -909,17 +954,22 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
     </div>
     <div class="dirs">${(r.directii ?? []).map((d, i) => `<div class="dir">
       ${images[i] ? `<div class="ba" style="--x:50%"><img src="${baseUrl}" alt="" /><img class="after" src="${imgUrl(images[i])}" alt="" />
-        <input type="range" min="0" max="100" value="50" aria-label="Înainte / după" /><span class="ba-l">înainte</span><span class="ba-r">după</span></div>`
+        <input type="range" min="0" max="100" value="50" aria-label="Înainte / după" /><span class="ba-l">înainte</span><span class="ba-r">${esc(d.sursa_imagine ?? "după")}</span></div>`
         : `<div class="dir-ph" data-ph="${i}">${d.culori?.length >= 2 ? "Pregătesc previzualizarea…" : "Fără imagine"}</div>`}
       ${(d.culori ?? []).length ? `<div class="mini-pal">${d.culori.map((h) => `<span style="background:${esc(h)}" title="${esc(h)}"></span>`).join("")}</div>` : ""}
       <div class="dir-body"><div class="dir-head"><b>${esc(d.titlu)}</b><span class="chip ${RISK[d.risc] ?? ""}">${esc(d.risc)}</span></div>
         <p>${esc(d.descriere)}</p>
+        ${d.text_nou ? `<p class="new-copy">„${esc(d.text_nou)}”</p>` : ""}
+        ${(d.pastrat?.length || d.schimbat?.length) ? `<div class="ks">
+          ${d.pastrat?.length ? `<div><b>Păstrează</b>${d.pastrat.map((x) => `<span class="chip good">${esc(x)}</span>`).join("")}</div>` : ""}
+          ${d.schimbat?.length ? `<div><b>Schimbă</b>${d.schimbat.map((x) => `<span class="chip warn">${esc(x)}</span>`).join("")}</div>` : ""}</div>` : ""}
         <p class="muted small"><b>De ce e distinct:</b> ${esc(d.de_ce_distinct)}</p>
         ${d.legatura_cu_identitatea ? `<p class="muted small"><b>Identitate:</b> ${esc(d.legatura_cu_identitatea)}</p>` : ""}
         <details><summary>Prompt pentru imagine</summary><p class="small">${esc(d.prompt_imagine)}</p>
           <button type="button" class="ghost sm" data-copy="${esc(d.prompt_imagine)}">Copiază promptul</button></details>
       </div></div>`).join("")}</div>
-    ${image_error ? `<p class="alert atentie"><b>Imagini AI</b> ${esc(image_error.slice(0, 160))} Am generat în schimb, direct în browser, o previzualizare cu paleta fiecărei direcții. Pentru o machetă completă, copiază promptul într-un generator de imagini și încarcă rezultatul în editor, la „Variante generate”.</p>` : ""}
+    <div class="gen-row"><button type="button" class="ghost${(r.directii ?? []).every((_, i) => images[i]) ? " hidden" : ""}" data-gen>🎨 Desenează reclamele noi cu AI (gratuit)</button>
+      <span class="muted small" data-gen-status>${(r.directii ?? []).every((_, i) => images[i]) ? "" : "Până atunci vezi o previzualizare cu paleta nouă."}</span></div>
     <div class="ab"><button type="button" class="primary big" data-ab>▶ Testează direcțiile în panel (A/B)</button>
       <div class="muted small">Originalul și fiecare direcție trec prin același panel orb; câștigă varianta recunoscută cel mai bine.</div>
       <div class="muted" data-ab-status></div><div data-ab-out></div></div>
@@ -935,17 +985,16 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
     const ph = box.querySelector(`[data-ph="${i}"]`);
     try {
       const blob = await recolorPreview(baseUrl, d.culori);
-      if (!blob) { ph.textContent = "Fără imagine"; return; }
+      if (!blob) { if (ph) ph.textContent = "Fără imagine"; return; }
       previews[i] = blob;
-      const after = URL.createObjectURL(blob);
-      ph.outerHTML = `<div class="ba" style="--x:50%"><img src="${baseUrl}" alt="" /><img class="after" src="${after}" alt="" />
-        <input type="range" min="0" max="100" value="50" aria-label="Înainte / după" /><span class="ba-l">înainte</span><span class="ba-r">paleta nouă</span></div>`;
-      const inp = box.querySelectorAll(".dir")[i].querySelector(".ba input");
-      inp.addEventListener("input", () => inp.parentElement.style.setProperty("--x", `${inp.value}%`));
-    } catch { ph.textContent = "Previzualizarea nu a putut fi generată"; }
+      if (images[i]) return;
+      setBA(box, i, baseUrl, URL.createObjectURL(blob), "paleta nouă (previzualizare)");
+    } catch { if (ph && !images[i]) ph.textContent = "Previzualizarea nu a putut fi generată"; }
   });
   const ab = box.querySelector("[data-ab]");
   ab.addEventListener("click", () => runAB(box, ctx, r, images, ab, previews, rbId));
+  box.querySelector("[data-gen]").addEventListener("click", () => genImages(box, rbId, r, images, baseUrl));
+  if (autoImages && baseUrl) genImages(box, rbId, r, images, baseUrl);
 }
 
 // A/B: originalul vs. fiecare direcție generată, același panel orb, aceeași statistică
