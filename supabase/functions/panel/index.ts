@@ -1,8 +1,8 @@
 // Edge function „panel” — panelul orb pentru „Fără logo”.
 // Acțiuni (POST JSON):
-//   { action: "run_variant", variant_id }   rulează n_evals evaluări Gemini vision pe o variantă și salvează voturile
+//   { action: "run_variant", variant_id }   rulează n_evals evaluări vision pe o variantă și salvează voturile
 //   { action: "finalize", analysis_id }     calculează Δ, atribuirea greșită și diagnosticul, apoi scrie raportul
-// Secret necesar: GEMINI_API_KEY (gratuit din aistudio.google.com/apikey). Opțional: GEMINI_MODEL (implicit gemini-3.5-flash-lite).
+// Configurare: MISTRAL_API_KEY (primar), apoi ZAI_API_KEY și GEMINI_API_KEY ca fallback-uri.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import * as S from "./stats.ts";
@@ -16,7 +16,7 @@ const CORS = {
 const UNKNOWN = "nu știu";
 const MAX_VARIANTS = 10;
 const MEMORY_PER_BRAND = 5;
-const CONCURRENCY = 3; // planul gratuit Gemini are limite mici de cereri/minut
+const CONCURRENCY = 3; // limitele providerului primar pot varia
 // Praguri de pornire (de calibrat pe setul de demo)
 const T = { asset: 0.15, decor: 0.03, traitor: 0.10 };
 
@@ -107,6 +107,8 @@ const geminiKey = () => (Deno.env.get("GEMINI_API_KEY") ?? "").trim().replace(/^
 const env = (k: string) => (Deno.env.get(k) ?? "").trim().replace(/^["'`]+|["'`]+$/g, "").trim();
 const ZAI_URL = "https://api.z.ai/api/paas/v4/chat/completions";
 const ZAI_MODEL = () => env("ZAI_MODEL") || "glm-4.7-flash";
+const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
+const MISTRAL_MODEL = () => env("MISTRAL_MODEL") || "mistral-medium-2508";
 let geminiBlockedUntil = 0;
 const hasImages = (body: any) => JSON.stringify(body.contents ?? []).includes('"inline_data"');
 
@@ -149,13 +151,27 @@ async function zai(body: any): Promise<string> {
   throw new Error("z.ai: prea multe cereri.");
 }
 
-// Punct unic de apel: întâi z.ai, iar dacă nu merge, Gemini
+async function mistral(body: any): Promise<string> {
+  const key = env("MISTRAL_API_KEY");
+  if (!key) throw new Error("Lipsește secretul MISTRAL_API_KEY.");
+  const payload = toChat(body, MISTRAL_MODEL(), hasImages(body));
+  const res = await fetch(MISTRAL_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(payload) });
+  if (!res.ok) throw new Error(`Mistral ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const j = await res.json();
+  const raw = j?.choices?.[0]?.message?.content;
+  const out = (Array.isArray(raw) ? raw.map((x: any) => x?.text ?? "").join("") : String(raw ?? "")).trim();
+  if (!out) throw new Error("Mistral: răspuns gol.");
+  return out;
+}
+
+// Punct unic de apel: Mistral Medium → z.ai → Gemini.
 async function gemini(body: Record<string, unknown>): Promise<string> {
   if ("__vision" in body) { body = { ...body }; delete (body as any).__vision; }
-  let zErr: unknown = null;
-  try { return await zai(body); } catch (e) { zErr = e; }
+  const priorErrors: string[] = [];
+  try { return await mistral(body); } catch (e) { priorErrors.push(e instanceof Error ? e.message.slice(0, 160) : String(e)); }
+  try { return await zai(body); } catch (e) { priorErrors.push(e instanceof Error ? e.message.slice(0, 160) : String(e)); }
   try { return await geminiDirect(body); }
-  catch (e) { throw new Error(`${zErr instanceof Error ? zErr.message.slice(0, 160) : zErr} | ${e instanceof Error ? e.message : e}`); }
+  catch (e) { throw new Error(`${priorErrors.join(" | ")} | ${e instanceof Error ? e.message : e}`); }
 }
 
 async function geminiDirect(body: Record<string, unknown>, attempt = 0): Promise<string> {
@@ -187,14 +203,15 @@ async function geminiDirect(body: Record<string, unknown>, attempt = 0): Promise
   return parts.filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join("").trim();
 }
 
-// Cereri cu căutare web: întâi z.ai (fără surse), iar dacă nu merge, Gemini cu Google Search
+// Cereri cu căutare web: Mistral și z.ai fără grounding, apoi Gemini cu Google Search.
 async function geminiRaw(body: Record<string, unknown>): Promise<any> {
   const wrap = (text: string) => ({ candidates: [{ content: { parts: [{ text }] }, groundingMetadata: { groundingChunks: [] } }] });
   const plain: any = { ...body }; delete plain.tools;
-  let zErr: unknown = null;
-  try { return wrap(await zai(plain)); } catch (e) { zErr = e; }
+  const priorErrors: string[] = [];
+  try { return wrap(await mistral(plain)); } catch (e) { priorErrors.push(e instanceof Error ? e.message.slice(0, 160) : String(e)); }
+  try { return wrap(await zai(plain)); } catch (e) { priorErrors.push(e instanceof Error ? e.message.slice(0, 160) : String(e)); }
   const key = geminiKey();
-  if (!key || Date.now() < geminiBlockedUntil) throw new Error(`${zErr instanceof Error ? zErr.message.slice(0, 160) : zErr} | Gemini indisponibil.`);
+  if (!key || Date.now() < geminiBlockedUntil) throw new Error(`${priorErrors.join(" | ")} | Gemini indisponibil.`);
   for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
       method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body),
@@ -205,7 +222,7 @@ async function geminiRaw(body: Record<string, unknown>): Promise<any> {
     if (res.status !== 429 && res.status < 500) throw new Error(`Gemini API ${res.status}: ${t.slice(0, 300)}`);
     await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
   }
-  throw new Error(`${zErr instanceof Error ? zErr.message.slice(0, 160) : zErr} | Gemini: cotă epuizată.`);
+  throw new Error(`${priorErrors.join(" | ")} | Gemini: cotă epuizată.`);
 }
 
 async function pool<T, R>(items: T[], n: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
@@ -625,7 +642,7 @@ Deno.serve(async (req) => {
     : { data: null };
   if (!member) return json({ error: "Acces doar pentru echipă. Autentifică-te în aplicație." }, 401);
   if (body.action === "providers") {
-    // verificăm rapid dacă Gemini mai are cotă (o cerere minusculă)
+    // Verificăm disponibilitatea furnizorilor; testăm Gemini doar dacă are cheie.
     let geminiOk = false;
     if (geminiKey() && Date.now() >= geminiBlockedUntil) {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, { method: "POST",
@@ -634,8 +651,9 @@ Deno.serve(async (req) => {
       geminiOk = r.ok;
       if (r.status === 429) geminiBlockedUntil = Date.now() + 10 * 60_000;
     }
+    const mistralOk = !!env("MISTRAL_API_KEY");
     const zaiOk = !!env("ZAI_API_KEY");
-    return json({ gemini: geminiOk, zai: zaiOk, zai_model: ZAI_MODEL(), slow: !geminiOk && !zaiOk });
+    return json({ mistral: mistralOk, mistral_model: MISTRAL_MODEL(), gemini: geminiOk, zai: zaiOk, zai_model: ZAI_MODEL(), slow: !mistralOk && !geminiOk && !zaiOk });
   }
   try {
     if (body.action === "diag") {

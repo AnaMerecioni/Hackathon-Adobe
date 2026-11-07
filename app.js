@@ -16,7 +16,7 @@ const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const imgUrl = (path) => sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
 const BUCKET = "creative"; // nume neutru: URL-urile cu „/ads/” sunt blocate de extensiile anti-reclame
-const MAX_SIDE = 1024; // imagini mici → cereri mici către Gemini
+const MAX_SIDE = 1024; // imagini mici → cereri mai rapide și mai ieftine
 
 // Redimensionează un canvas/imagine la maxim MAX_SIDE și întoarce un Blob
 function toScaledBlob(source, w, h, type = "image/png") {
@@ -318,7 +318,7 @@ async function invoke(body) {
   if (error) {
     let msg = error.message;
     try { msg = (await error.context.json()).error ?? msg; } catch {}
-    if (/non-2xx/.test(msg)) msg = "Serverul nu a răspuns la timp (limitele gratuite Gemini). Încearcă din nou peste un minut.";
+    if (/non-2xx/.test(msg)) msg = "Serverul nu a răspuns la timp (limitele furnizorilor AI). Încearcă din nou peste un minut.";
     throw new Error(msg);
   }
   return data;
@@ -361,7 +361,7 @@ async function runAll(variants, onProgress) {
       // o variantă poate cere mai multe runde (limita de timp a serverului); continuăm până sunt gata toate evaluările
       let out = await invoke({ action: "run_variant", variant_id: v.id });
       for (let k = 0; out?.partial && k < 8; k++) out = await invoke({ action: "run_variant", variant_id: v.id, continue: true });
-      if (out?.partial) throw new Error("Panelul răspunde prea încet acum (limitele gratuite Gemini). Încearcă din nou peste câteva minute.");
+      if (out?.partial) throw new Error("Panelul răspunde prea încet acum (limitele furnizorilor AI). Încearcă din nou peste câteva minute.");
       onProgress(++done, variants.length, v);
     }
   }));
@@ -816,8 +816,8 @@ function mountHeatmap(box, ctx) {
         ${zs.map((z, i) => `<span class="hz" data-z="${i}" style="top:${z.box[0] / 10}%;left:${z.box[1] / 10}%;height:${(z.box[2] - z.box[0]) / 10}%;width:${(z.box[3] - z.box[1]) / 10}%"></span>`).join("")}</div>
         <ol class="heat-list">${zs.map((z, i) => `<li data-z="${i}"><span class="hbar" style="--v:${Math.round(z.intensitate * 100)}%"></span>
           <b>${esc(z.ce)}</b><span class="muted small">ca la ${esc(z.concurent)} · ${Math.round(z.intensitate * 100)}%</span></li>`).join("") || "<li class='muted'>Nu au fost găsite zone asemănătoare.</li>"}</ol></div>
-        <p class="muted small">Roșu = seamănă puternic cu reclamele concurenților din memorie. Zonele sunt marcate de Gemini comparând imaginile; trece cu mouse-ul pe listă.</p>` :
-        `<p class="muted small">Gemini compară reclama ta cu reclamele concurenților și colorează zonele care seamănă.</p>`}
+        <p class="muted small">Roșu = seamănă puternic cu reclamele concurenților din memorie. Modelul AI compară imaginile și marchează zonele; trece cu mouse-ul pe listă.</p>` :
+        `<p class="muted small">Modelul AI compară reclama ta cu reclamele concurenților și colorează zonele care seamănă.</p>`}
       <div class="muted small" data-heat-status></div></div>`;
     box.querySelector("[data-heat]").addEventListener("click", run);
     if (!heat) return;
