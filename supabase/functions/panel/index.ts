@@ -58,8 +58,11 @@ function inlineImage(path: string) {
   return imgCache.get(path)!;
 }
 
+// Curățăm cheia de spații, rânduri noi și ghilimele lipite din greșeală
+const geminiKey = () => (Deno.env.get("GEMINI_API_KEY") ?? "").trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+
 async function gemini(body: Record<string, unknown>, attempt = 0): Promise<string> {
-  const key = Deno.env.get("GEMINI_API_KEY");
+  const key = geminiKey();
   if (!key) throw new Error("Lipsește secretul GEMINI_API_KEY în Supabase (Edge Functions → Secrets).");
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
     method: "POST",
@@ -263,6 +266,13 @@ Deno.serve(async (req) => {
   let body: any;
   try { body = await req.json(); } catch { return json({ error: "JSON invalid." }, 400); }
   try {
+    if (body.action === "diag") {
+      // diagnostic fără a expune cheia: lungime, prefix, caractere suspecte
+      const raw = Deno.env.get("GEMINI_API_KEY") ?? "";
+      const k = geminiKey();
+      return json({ model: MODEL, raw_length: raw.length, length: k.length, prefix: k.slice(0, 4),
+        had_whitespace_or_quotes: raw !== k, non_ascii: /[^\x21-\x7e]/.test(k) });
+    }
     if (body.action === "run_variant" && body.variant_id) {
       return json(await runVariant(body.variant_id));
     }
