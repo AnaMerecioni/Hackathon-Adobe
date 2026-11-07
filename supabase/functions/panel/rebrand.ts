@@ -43,6 +43,37 @@ export async function briefFromText(d: Deps, text: string, brand: string) {
   try { return JSON.parse(out.replace(/^```(json)?|```$/g, "")); } catch { throw new Error("Nu am putut extrage răspunsurile. Încearcă din nou."); }
 }
 
+/** Completează brief-ul din surse publice: Gemini cu Google Search. Întoarce câmpurile + sursele găsite. */
+export async function briefFromWeb(d: Deps & { geminiRaw: (body: Record<string, unknown>) => Promise<any> }, brand: string, category: string) {
+  const b = clip(brand, 80), cat = clip(category, 60);
+  if (!b) throw new Error("Lipsește numele brandului.");
+  const keys = Object.keys(BRIEF_FIELDS);
+  const j = await d.geminiRaw({
+    systemInstruction: { parts: [{ text: [
+      "Ești strateg de brand. Cauți pe internet informații publice despre brandul indicat (site oficial, comunicate, campanii, articole).",
+      "Completezi, în română, scurt și concret, câmpurile unui brief de brand. Reguli:",
+      "- folosești doar ce găsești în surse; dacă nu găsești ceva, lași câmpul gol (\"\"); nu inventezi;",
+      "- „pastreaza”: activele vizuale și verbale cunoscute ale brandului (culori, logo, mascotă, slogan);",
+      "- „evita”: doar dacă reiese clar din poziționare (de ex. codurile concurenților principali);",
+      "- „constrangeri” și „curaj” le lași goale (le decide echipa);",
+      "- răspunzi DOAR cu un obiect JSON cu cheile: " + keys.join(", ") + ".",
+    ].join("\n") }] },
+    contents: [{ role: "user", parts: [{ text: `Brand: ${b}${cat ? ` (categoria: ${cat}, România)` : ""}` }] }],
+    tools: [{ google_search: {} }],
+    generationConfig: { maxOutputTokens: 2000, temperature: 0.2 },
+  });
+  const cand = j?.candidates?.[0];
+  const txt = (cand?.content?.parts ?? []).filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join("");
+  const m = txt.match(/\{[\s\S]*\}/);
+  let out: Record<string, string> = {};
+  try { out = m ? JSON.parse(m[0]) : {}; } catch { throw new Error("Nu am putut citi informațiile găsite. Încearcă din nou."); }
+  const clean = Object.fromEntries(keys.map((k) => [k, clip(out[k], 300)]));
+  clean.constrangeri = ""; clean.curaj = "";
+  const surse = (cand?.groundingMetadata?.groundingChunks ?? []).map((c: any) => c.web).filter((w: any) => w?.uri)
+    .map((w: any) => ({ url: w.uri, titlu: clip(w.title, 80) })).slice(0, 6);
+  return { ...clean, surse };
+}
+
 const clip = (s: unknown, n = 400) => String(s ?? "").slice(0, n).trim();
 const POLL_KEY = () => (Deno.env.get("POLLINATIONS_KEY") ?? "").trim();
 const EDIT_MODEL = Deno.env.get("POLLINATIONS_EDIT_MODEL") ?? "black-forest-labs/flux-3-image-klein";

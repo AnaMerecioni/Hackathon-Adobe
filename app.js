@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071445";
+const APP_VERSION = "202611071500";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -804,6 +804,8 @@ function renderBriefForm(panel, ctx, { rival, assets }) {
     </div></div>
     <div class="rb-step"><span class="rb-num">2</span><div>
       <h3>Identitatea brandului</h3><p class="muted">Toate câmpurile sunt opționale. Poți corecta ce a completat AI-ul.</p>
+      <div class="web-fill"><button type="button" class="ghost" data-web>🌐 Completează de pe internet</button>
+        <span class="muted small" data-web-status>Caută brandul pe Google și completează doar câmpurile goale.</span></div>
       <div class="rb-form">${BRIEF_Q.map(([k, q, ph, opts]) => `<label class="rb-q"><span>${q}</span>
         ${opts ? `<div class="opts" data-opts="${k}">${opts.map((o) => `<button type="button" class="opt" data-v="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
         <input data-k="${k}" placeholder="${esc(ph)}" /></label>`).join("")}</div>
@@ -851,6 +853,19 @@ function renderBriefForm(panel, ctx, { rival, assets }) {
       let n = 0;
       for (const [k] of BRIEF_Q) if (out?.[k]) { val(k).value = out[k]; n++; }
       st.textContent = `Am completat ${n} răspunsuri. Verifică-le mai jos.`;
+    } catch (err) { st.innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+    finally { e.target.disabled = false; }
+  });
+  panel.querySelector("[data-web]").addEventListener("click", async (e) => {
+    const st = panel.querySelector("[data-web-status]");
+    e.target.disabled = true; st.textContent = `Caut informații publice despre ${ctx.target}…`;
+    try {
+      const out = await invoke({ action: "brief_from_web", brand: ctx.target, category: ctx.s?.category ?? "" });
+      let n = 0;
+      for (const [k] of BRIEF_Q) if (out?.[k] && !val(k).value.trim()) { val(k).value = out[k]; val(k).classList.add("from-web"); n++; }
+      const src = (out?.surse ?? []).slice(0, 4).map((u) => `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.titlu || new URL(u.url).hostname)}</a>`).join(" · ");
+      st.innerHTML = (n ? `Am completat ${n} câmpuri goale din surse publice. Verifică-le și modifică ce nu se potrivește.` : "Nu am găsit nimic nou de completat.") +
+        (src ? `<br><span class="small">Surse: ${src}</span>` : "");
     } catch (err) { st.innerHTML = `<span class="err">${esc(err.message)}</span>`; }
     finally { e.target.disabled = false; }
   });

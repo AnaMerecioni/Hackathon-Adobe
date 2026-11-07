@@ -6,7 +6,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import * as S from "./stats.ts";
-import { rebrand, briefFromText, rebrandImage } from "./rebrand.ts";
+import { rebrand, briefFromText, briefFromWeb, rebrandImage } from "./rebrand.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -129,6 +129,19 @@ async function gemini(body: Record<string, unknown>, attempt = 0): Promise<strin
   const j = await res.json();
   const parts = j?.candidates?.[0]?.content?.parts ?? [];
   return parts.filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join("").trim();
+}
+
+async function geminiRaw(body: Record<string, unknown>): Promise<any> {
+  const key = geminiKey();
+  if (!key) throw new Error("Lipsește secretul GEMINI_API_KEY în Supabase (Edge Functions → Secrets).");
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+      method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    if ((res.status === 429 || res.status >= 500) && attempt < 3) { await new Promise((r) => setTimeout(r, 3000 * (attempt + 1))); continue; }
+    if (!res.ok) throw new Error(`Gemini API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    return res.json();
+  }
 }
 
 async function pool<T, R>(items: T[], n: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
@@ -557,6 +570,9 @@ Deno.serve(async (req) => {
     if (body.action === "migrate_storage") return json(await migrateStorage());
     if (body.action === "brief_from_text") {
       return json(await briefFromText({ supabase, gemini, inlineImage, geminiKey, bucket: BUCKET }, body.text ?? "", body.brand ?? "brand"));
+    }
+    if (body.action === "brief_from_web") {
+      return json(await briefFromWeb({ supabase, gemini, geminiRaw, inlineImage, geminiKey, bucket: BUCKET }, body.brand ?? "", body.category ?? ""));
     }
     if (body.action === "rebrand_image" && body.rebrand_id) {
       return json(await rebrandImage({ supabase, gemini, inlineImage, geminiKey, bucket: BUCKET }, body.rebrand_id, Number(body.index ?? 0)));
