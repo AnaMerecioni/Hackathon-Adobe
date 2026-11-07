@@ -103,18 +103,14 @@ function cosine(a: number[], b: number[]) {
 const geminiKey = () => (Deno.env.get("GEMINI_API_KEY") ?? "").trim().replace(/^["'`]+|["'`]+$/g, "").trim();
 
 // ---------- furnizori de model ----------
-// Ordinea: Gemini → Groq (gratuit, vede imagini) → DeepSeek (doar text). Când Gemini dă 429 de cotă,
-// îl sărim 10 minute în această instanță, ca să nu pierdem timp cu cereri respinse.
+// Ordinea: z.ai (GLM) → Gemini. Când Gemini dă 429 de cotă, îl sărim 10 minute în această instanță.
 const env = (k: string) => (Deno.env.get(k) ?? "").trim().replace(/^["'`]+|["'`]+$/g, "").trim();
-const GROQ_MODEL = () => env("GROQ_MODEL") || "meta-llama/llama-4-scout-17b-16e-instruct";
-const GROQ_SEARCH_MODEL = () => env("GROQ_SEARCH_MODEL") || "groq/compound-mini";
-const DEEPSEEK_MODEL = () => env("DEEPSEEK_MODEL") || "deepseek-chat";
-const COHERE_VISION_MODEL = () => env("COHERE_VISION_MODEL") || "command-a-vision-07-2025";
-const COHERE_TEXT_MODEL = () => env("COHERE_MODEL") || "command-a-03-2025";
+const ZAI_URL = "https://api.z.ai/api/paas/v4/chat/completions";
+const ZAI_MODEL = () => env("ZAI_MODEL") || "glm-4.7-flash";
 let geminiBlockedUntil = 0;
 const hasImages = (body: any) => JSON.stringify(body.contents ?? []).includes('"inline_data"');
 
-// Transformă cererea în format Gemini într-o cerere OpenAI-compatibilă (Groq, DeepSeek)
+// Transformă cererea în format Gemini într-o cerere OpenAI-compatibilă (z.ai)
 function toChat(body: any, model: string, withImages: boolean) {
   const gc = body.generationConfig ?? {};
   let system = (body.systemInstruction?.parts ?? []).map((p: any) => p.text).join("\n");
@@ -126,68 +122,46 @@ function toChat(body: any, model: string, withImages: boolean) {
     if (p.text) content.push({ type: "text", text: p.text });
     else if (p.inline_data && withImages) content.push({ type: "image_url", image_url: { url: `data:${p.inline_data.mime_type};base64,${p.inline_data.data}` } });
   }
-  // Groq acceptă cel mult 5 imagini pe cerere: păstrăm ultimele (reclama evaluată e mereu ultima)
-  const imgs = content.filter((x) => x.type === "image_url");
-  const keep = new Set(imgs.slice(-5));
-  const finalContent = content.filter((x) => x.type !== "image_url" || keep.has(x));
   return {
     model,
-    messages: [{ role: "system", content: system }, { role: "user", content: withImages ? finalContent : finalContent.map((x) => x.text).join("\n\n") }],
+    messages: [{ role: "system", content: system }, { role: "user", content: withImages ? content : content.map((x) => x.text).join("\n\n") }],
     temperature: gc.temperature ?? 0.7,
     max_tokens: Math.min(gc.maxOutputTokens ?? 2048, 8000),
     ...(wantsJson ? { response_format: { type: "json_object" } } : {}),
   };
 }
-async function chatCall(url: string, key: string, payload: any, label: string): Promise<string> {
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(payload) });
-    if (res.status === 402) {
-      // Pollinations gratuit: „1 reply every 45 seconds per IP. Retry after 45s” → așteptăm o dată, apoi renunțăm
-      const t = await res.text();
-      const wait = Number(t.match(/Retry after (\d+)/i)?.[1] ?? 45);
-      if (attempt >= 1 || !/FREE_LIMIT|Retry after/i.test(t)) throw new Error(`${label}: limita gratuită (un răspuns la ${wait} s).`);
-      await new Promise((r) => setTimeout(r, Math.min(wait + 1, 50) * 1000)); continue;
-    }
+async function zai(body: any): Promise<string> {
+  const key = env("ZAI_API_KEY");
+  if (!key) throw new Error("Lipsește secretul ZAI_API_KEY.");
+  const payload = toChat(body, ZAI_MODEL(), hasImages(body));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(ZAI_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(payload) });
     if (res.status === 429 || res.status >= 500) {
       const ra = Number(res.headers.get("retry-after")) || 2 * 2 ** attempt;
-      await new Promise((r) => setTimeout(r, Math.min(ra, 20) * 1000)); continue;
+      await new Promise((r) => setTimeout(r, Math.min(ra, 15) * 1000)); continue;
     }
-    if (!res.ok) throw new Error(`${label} ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    if (!res.ok) throw new Error(`z.ai ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const j = await res.json();
-    return String(j?.choices?.[0]?.message?.content ?? "").trim();
+    const out = String(j?.choices?.[0]?.message?.content ?? "").trim();
+    if (!out) throw new Error("z.ai: răspuns gol.");
+    return out;
   }
-  throw new Error(`${label}: prea multe cereri, încearcă peste un minut.`);
-}
-// needsVision: cererea nu are sens fără imagine (panelul orb, heatmap). Altfel, la nevoie, trimitem doar textul.
-async function fallback(body: any, why: string, needsVision = false): Promise<string> {
-  const img = hasImages(body);
-  let last: unknown = null;
-  if (env("GROQ_API_KEY")) {
-    try { return await chatCall("https://api.groq.com/openai/v1/chat/completions", env("GROQ_API_KEY"), toChat(body, GROQ_MODEL(), img), "Groq"); }
-    catch (e) { last = e; }
-  }
-  // Cohere (cheie de test gratuită): Command A Vision vede imagini, Command A pentru text
-  if (env("COHERE_API_KEY")) {
-    try { return await chatCall("https://api.cohere.ai/compatibility/v1/chat/completions", env("COHERE_API_KEY"),
-      toChat(body, img ? COHERE_VISION_MODEL() : COHERE_TEXT_MODEL(), img), "Cohere"); }
-    catch (e) { last = e; }
-  }
-  if (needsVision && img) throw new Error(why + " Pentru analizele cu imagini adaugă secretul COHERE_API_KEY sau GROQ_API_KEY (gratuit, console.groq.com/keys) sau așteaptă resetarea cotei Gemini." +
-    (last ? ` (${last instanceof Error ? last.message.slice(0, 120) : ""})` : ""));
-  if (env("DEEPSEEK_API_KEY")) {
-    try { return await chatCall("https://api.deepseek.com/chat/completions", env("DEEPSEEK_API_KEY"), toChat(body, DEEPSEEK_MODEL(), false), "DeepSeek"); }
-    catch (e) { last = e; }
-  }
-  // ultima rezervă: Pollinations, gratuit, fără cheie (doar text)
-  try { return await chatCall("https://text.pollinations.ai/openai", "anonim", toChat(body, env("POLLINATIONS_TEXT_MODEL") || "openai", false), "Pollinations"); }
-  catch (e) { throw new Error(`${why} Nici furnizorii de rezervă n-au răspuns: ${e instanceof Error ? e.message.slice(0, 160) : e}`); }
+  throw new Error("z.ai: prea multe cereri.");
 }
 
-async function gemini(body: Record<string, unknown>, attempt = 0): Promise<string> {
-  const needsVision = !!body.__vision;
+// Punct unic de apel: întâi z.ai, iar dacă nu merge, Gemini
+async function gemini(body: Record<string, unknown>): Promise<string> {
   if ("__vision" in body) { body = { ...body }; delete (body as any).__vision; }
+  let zErr: unknown = null;
+  try { return await zai(body); } catch (e) { zErr = e; }
+  try { return await geminiDirect(body); }
+  catch (e) { throw new Error(`${zErr instanceof Error ? zErr.message.slice(0, 160) : zErr} | ${e instanceof Error ? e.message : e}`); }
+}
+
+async function geminiDirect(body: Record<string, unknown>, attempt = 0): Promise<string> {
   const key = geminiKey();
-  if (!key || Date.now() < geminiBlockedUntil) return fallback(body, "Gemini nu e disponibil acum (cotă epuizată).", needsVision);
+  if (!key) throw new Error("Lipsește GEMINI_API_KEY.");
+  if (Date.now() < geminiBlockedUntil) throw new Error("Cota gratuită Gemini s-a terminat.");
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
     method: "POST",
     headers: { "x-goog-api-key": key, "content-type": "application/json" },
@@ -195,8 +169,7 @@ async function gemini(body: Record<string, unknown>, attempt = 0): Promise<strin
   });
   if (res.status === 429) {
     const t = await res.clone().text();
-    // cotă epuizată (zilnică sau a planului): trecem direct pe furnizorul de rezervă
-    if (/quota|PerDay|per day|daily|billing/i.test(t)) { geminiBlockedUntil = Date.now() + 10 * 60_000; return fallback(body, "Cota gratuită Gemini s-a terminat.", needsVision); }
+    if (/quota|PerDay|per day|daily|billing/i.test(t)) { geminiBlockedUntil = Date.now() + 10 * 60_000; throw new Error("Cota gratuită Gemini s-a terminat."); }
   }
   if ((res.status === 429 || res.status >= 500) && attempt < 3) {
     let wait = 2000 * 2 ** attempt;
@@ -206,46 +179,33 @@ async function gemini(body: Record<string, unknown>, attempt = 0): Promise<strin
       if (d) wait = Math.max(wait, parseFloat(d) * 1000);
     } catch { /* ignorăm */ }
     await new Promise((r) => setTimeout(r, Math.min(wait, 15000) + Math.random() * 500));
-    return gemini(needsVision ? { ...body, __vision: true } : body, attempt + 1);
+    return geminiDirect(body, attempt + 1);
   }
-  if (res.status === 429 || res.status >= 500) return fallback(body, `Gemini API ${res.status}.`, needsVision);
   if (!res.ok) throw new Error(`Gemini API ${res.status}: ${(await res.text()).slice(0, 400)}`);
   const j = await res.json();
   const parts = j?.candidates?.[0]?.content?.parts ?? [];
   return parts.filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join("").trim();
 }
 
-// Cerere cu Google Search (pentru surse reale). Rezerva: Groq Compound (are căutare web), apoi model fără căutare.
+// Cereri cu căutare web: întâi z.ai (fără surse), iar dacă nu merge, Gemini cu Google Search
 async function geminiRaw(body: Record<string, unknown>): Promise<any> {
-  const key = geminiKey();
-  const wrap = (text: string, sources: any[] = []) => ({ candidates: [{ content: { parts: [{ text }] },
-    groundingMetadata: { groundingChunks: sources.map((s) => ({ web: { uri: s.url, title: s.title } })) } }] });
-  if (key && Date.now() >= geminiBlockedUntil) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
-        method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body),
-      });
-      if (res.ok) return res.json();
-      const t = await res.text();
-      if (res.status === 429 && /quota|PerDay|per day|daily|billing/i.test(t)) { geminiBlockedUntil = Date.now() + 10 * 60_000; break; }
-      if (res.status !== 429 && res.status < 500) throw new Error(`Gemini API ${res.status}: ${t.slice(0, 300)}`);
-      await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
-    }
-  }
+  const wrap = (text: string) => ({ candidates: [{ content: { parts: [{ text }] }, groundingMetadata: { groundingChunks: [] } }] });
   const plain: any = { ...body }; delete plain.tools;
-  if (env("GROQ_API_KEY")) {
-    try {
-      const payload = toChat(plain, GROQ_SEARCH_MODEL(), false);
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", { method: "POST",
-        headers: { Authorization: `Bearer ${env("GROQ_API_KEY")}`, "content-type": "application/json" }, body: JSON.stringify({ ...payload, response_format: undefined }) });
-      if (res.ok) {
-        const j = await res.json(), m = j?.choices?.[0]?.message ?? {};
-        const results = (m.executed_tools ?? []).flatMap((t: any) => t?.search_results?.results ?? []);
-        return wrap(String(m.content ?? ""), results.filter((r: any) => r?.url).map((r: any) => ({ url: r.url, title: r.title })));
-      }
-    } catch { /* trecem pe varianta fără căutare */ }
+  let zErr: unknown = null;
+  try { return wrap(await zai(plain)); } catch (e) { zErr = e; }
+  const key = geminiKey();
+  if (!key || Date.now() < geminiBlockedUntil) throw new Error(`${zErr instanceof Error ? zErr.message.slice(0, 160) : zErr} | Gemini indisponibil.`);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+      method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (res.ok) return res.json();
+    const t = await res.text();
+    if (res.status === 429 && /quota|PerDay|per day|daily|billing/i.test(t)) { geminiBlockedUntil = Date.now() + 10 * 60_000; break; }
+    if (res.status !== 429 && res.status < 500) throw new Error(`Gemini API ${res.status}: ${t.slice(0, 300)}`);
+    await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
   }
-  return wrap(await fallback(plain, "Căutarea web nu e disponibilă acum.", false));
+  throw new Error(`${zErr instanceof Error ? zErr.message.slice(0, 160) : zErr} | Gemini: cotă epuizată.`);
 }
 
 async function pool<T, R>(items: T[], n: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
@@ -674,8 +634,8 @@ Deno.serve(async (req) => {
       geminiOk = r.ok;
       if (r.status === 429) geminiBlockedUntil = Date.now() + 10 * 60_000;
     }
-    const groq = !!env("GROQ_API_KEY"), deepseek = !!env("DEEPSEEK_API_KEY"), cohere = !!env("COHERE_API_KEY");
-    return json({ gemini: geminiOk, groq, cohere, deepseek, groq_model: GROQ_MODEL(), slow: !geminiOk && !groq && !cohere && !deepseek });
+    const zaiOk = !!env("ZAI_API_KEY");
+    return json({ gemini: geminiOk, zai: zaiOk, zai_model: ZAI_MODEL(), slow: !geminiOk && !zaiOk });
   }
   try {
     if (body.action === "diag") {
