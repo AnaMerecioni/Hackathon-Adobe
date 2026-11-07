@@ -27,4 +27,6 @@ Pragurile de diagnostic (Δ > 0,15 pentru asset, |Δ| < 0,03 pentru decor, atrac
 ## Limite cunoscute
 
 - Demo fără conturi: oricine are linkul poate încărca reclame și porni analize, care consumă din cota Gemini.
-- Detecția automată de logo (OWLv2), OCR-ul (Tesseract) și similaritatea CLIP nu sunt încă integrate. Mascarea se face manual. Coloana `analyses.similarity` e pregătită pentru similaritate.
+- Detecția automată de logo (OWLv2) și OCR-ul (Tesseract) nu sunt încă integrate. Mascarea se face manual.
+- Similaritatea se calculează cu `gemini-embedding-2` (768 dimensiuni): cosinus între reclama mascată și reclamele fiecărui brand din categorie. Reclama e marcată „generică” dacă seamănă cu concurența peste media categoriei sau seamănă mai mult cu un concurent decât cu propriul brand.
+- Aceeași imagine nu poate fi și memorie, și test: duplicatele sunt detectate după hash SHA-256.

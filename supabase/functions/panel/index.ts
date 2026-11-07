@@ -43,19 +43,56 @@ const sd = (xs: number[]) => {
 };
 
 // Imaginile se trimit inline (base64); le descărcăm o singură dată per rulare.
-const imgCache = new Map<string, Promise<{ mime_type: string; data: string }>>();
-function inlineImage(path: string) {
+type Img = { mime_type: string; data: string; sha256: string };
+const imgCache = new Map<string, Promise<Img>>();
+function loadImage(path: string): Promise<Img> {
   if (!imgCache.has(path)) {
     imgCache.set(path, (async () => {
       const { data, error } = await supabase.storage.from("ads").download(path);
       if (error || !data) throw new Error(`Nu pot descărca imaginea ${path}`);
       const bytes = new Uint8Array(await data.arrayBuffer());
+      const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
+        .map((b) => b.toString(16).padStart(2, "0")).join("");
       let bin = "";
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      return { mime_type: data.type || "image/png", data: btoa(bin) };
+      return { mime_type: data.type || "image/png", data: btoa(bin), sha256: hash };
     })());
   }
   return imgCache.get(path)!;
+}
+async function inlineImage(path: string) {
+  const { mime_type, data } = await loadImage(path);
+  return { mime_type, data };
+}
+// Completează hash-ul reclamelor vechi, încărcate înainte de coloana sha256
+async function adHash(ad: { id: string; image_path: string; sha256?: string | null }) {
+  if (ad.sha256) return ad.sha256;
+  const h = (await loadImage(ad.image_path)).sha256;
+  await supabase.from("ads").update({ sha256: h }).eq("id", ad.id);
+  return h;
+}
+
+// ---------- similaritate (Gemini Embedding 2, multimodal) ----------
+const EMBED_MODEL = Deno.env.get("GEMINI_EMBED_MODEL") ?? "gemini-embedding-2";
+async function embedImage(path: string, attempt = 0): Promise<number[]> {
+  const img = await inlineImage(path);
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent`, {
+    method: "POST",
+    headers: { "x-goog-api-key": geminiKey(), "content-type": "application/json" },
+    body: JSON.stringify({ content: { parts: [{ inline_data: img }] }, output_dimensionality: 768 }),
+  });
+  if ((res.status === 429 || res.status >= 500) && attempt < 5) {
+    await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+    return embedImage(path, attempt + 1);
+  }
+  if (!res.ok) throw new Error(`Embedding ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const j = await res.json();
+  return j?.embedding?.values ?? j?.embeddings?.[0]?.values ?? [];
+}
+function cosine(a: number[], b: number[]) {
+  let d = 0, na = 0, nb = 0;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) { d += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; }
+  return na && nb ? d / Math.sqrt(na * nb) : 0;
 }
 
 // Curățăm cheia de spații, rânduri noi și ghilimele lipite din greșeală
@@ -122,11 +159,13 @@ async function runVariant(variantId: string) {
   // Memoria însămânțată: 3–5 reclame nemascate, etichetate, per brand — niciodată reclama testată.
   const memory: any[] = [];
   if (analysis.use_memory) {
-    const { data: mem } = await supabase.from("ads").select("id,image_path,brand_id,brands!inner(name,category)")
+    const { data: mem } = await supabase.from("ads").select("id,image_path,sha256,brand_id,brands!inner(name,category)")
       .eq("role", "memory").eq("brands.category", analysis.category).neq("id", testAd.id)
       .order("created_at");
+    const testHash = await adHash(testAd);
     const perBrand: Record<string, number> = {};
     for (const m of mem ?? []) {
+      if ((await adHash(m)) === testHash) continue; // aceeași imagine ca reclama testată → ar strica testul orb
       const n = (m as any).brands.name;
       perBrand[n] = (perBrand[n] ?? 0) + 1;
       if (perBrand[n] > MEMORY_PER_BRAND) continue;
@@ -193,6 +232,46 @@ async function runVariant(variantId: string) {
   return { variant_id: variantId, target, ...upd, n: votes.length };
 }
 
+async function computeSimilarity(a: any, base: any, target: string) {
+  imgCache.clear();
+  const { data: ads } = await supabase.from("ads").select("id,image_path,sha256,embedding,brands!inner(name,category)")
+    .eq("brands.category", a.category);
+  const testHash = await adHash(a.ads);
+  await pool(ads ?? [], 3, async (x: any) => { x.sha256 = await adHash(x); });
+  const pool_ = (ads ?? []).filter((x: any) => x.id !== a.ad_id && x.sha256 !== testHash);
+  // embeddings cache-uite pe reclamă
+  await pool(pool_, 3, async (x: any) => {
+    if (x.embedding?.length) return;
+    x.embedding = await embedImage(x.image_path);
+    await supabase.from("ads").update({ embedding: x.embedding }).eq("id", x.id);
+  });
+  const baseEmb = base.embedding?.length ? base.embedding : await embedImage(base.image_path);
+  if (!base.embedding?.length) await supabase.from("variants").update({ embedding: baseEmb }).eq("id", base.id);
+
+  const byBrand: Record<string, number[]> = {};
+  for (const x of pool_ as any[]) (byBrand[x.brands.name] ??= []).push(cosine(baseEmb, x.embedding));
+  const per_brand = Object.fromEntries(Object.entries(byBrand).map(([b, xs]) => [b, mean(xs)]));
+  const competitors = Object.entries(per_brand).filter(([b]) => b !== target).sort((x, y) => y[1] - x[1]);
+  const compSims = (pool_ as any[]).filter((x) => x.brands.name !== target).map((x) => cosine(baseEmb, x.embedding));
+  // „tipic” = cât de asemănătoare sunt în medie reclamele din categorie între ele
+  const pair: number[] = [];
+  for (let i = 0; i < pool_.length; i++) for (let j = i + 1; j < pool_.length; j++)
+    pair.push(cosine((pool_[i] as any).embedding, (pool_[j] as any).embedding));
+  const typical = pair.length ? mean(pair) : null;
+  const own = per_brand[target] ?? null;
+  const [nearestBrand, nearest] = competitors[0] ?? [null, null];
+  const category_mean = compSims.length ? mean(compSims) : null;
+  return {
+    model: EMBED_MODEL, per_brand, own_brand: own, nearest_brand: nearestBrand, nearest,
+    category_mean, typical, distinctiveness: own != null && nearest != null ? own - nearest : null,
+    // reclamă generică: seamănă cu concurența mai mult decât seamănă de obicei reclamele din categorie între ele,
+    // sau seamănă mai mult cu un concurent decât cu propriul brand
+    generic: category_mean != null && typical != null
+      ? category_mean > typical || (own != null && nearest != null && nearest > own) : null,
+    n_ads: pool_.length,
+  };
+}
+
 // ---------- finalize ----------
 async function finalize(analysisId: string) {
   const { data: a } = await supabase.from("analyses").select("*, ads!inner(*, brands!inner(*))").eq("id", analysisId).single();
@@ -232,6 +311,13 @@ async function finalize(analysisId: string) {
     if (error) throw error;
   }
 
+  // Similaritate: reclama mascată vs. reclamele din categorie (embeddings multimodale)
+  let similarity = a.similarity ?? null;
+  try { similarity = await computeSimilarity(a, base, target); } catch (e) {
+    similarity = { error: e instanceof Error ? e.message : String(e) };
+  }
+  await supabase.from("analyses").update({ similarity }).eq("id", analysisId);
+
   const misattribution = Object.fromEntries(
     Object.entries(base.distribution as Record<string, number>).filter(([b]) => b !== target),
   );
@@ -241,7 +327,7 @@ async function finalize(analysisId: string) {
   const summary = {
     target, thresholds: T, model: MODEL, n_evals: a.n_evals, use_memory: a.use_memory,
     attribution: base.attribution, attribution_sd: base.attribution_sd, misattribution,
-    generic: a.similarity ? (a.similarity.category_mean ?? 0) > 0.9 : null, similarity: a.similarity,
+    generic: similarity?.generic ?? null, similarity,
     elements: impacts.map(({ analysis_id, _top, ...r }) => ({ ...r, top_competitor: _top[0], top_pull: _top[1] })),
     generated,
   };
@@ -250,6 +336,7 @@ async function finalize(analysisId: string) {
     systemInstruction: { parts: [{ text: "Scrii rapoarte scurte de pre-test publicitar, în română, pentru echipe de brand. Folosește DOAR cifrele primite; " +
       "nu inventa valori. Procentele cu 0 zecimale, Δ cu 2 zecimale. Structură: 1) atribuire și cu cine e confundat brandul; " +
       "2) elementele trădătoare și ce se întâmplă fără ele; 3) asset-urile reale; 4) decorul; 5) variantele generate (dacă există); " +
+      "Dacă similarity.generic e true, spune că reclama seamănă cu restul categoriei și cu cine seamănă cel mai mult (nearest_brand). " +
       "6) o recomandare concretă. Maxim 180 de cuvinte, fără titluri markdown și fără asteriscuri." }] },
     contents: [{ role: "user", parts: [{ text: `Metrici (JSON):\n${JSON.stringify(summary)}` }] }],
     generationConfig: { maxOutputTokens: 1500 },

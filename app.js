@@ -23,6 +23,33 @@ async function scaleFile(file) {
   if (Math.max(bmp.width, bmp.height) <= MAX_SIDE) return file;
   return toScaledBlob(bmp, bmp.width, bmp.height, file.type === "image/png" ? "image/png" : "image/jpeg");
 }
+async function sha(blob) {
+  const d = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ---------- mărire imagine ----------
+document.addEventListener("click", (e) => {
+  const img = e.target.closest("#ad-gallery img, .variants img");
+  if (!img) return;
+  const lb = $("#lightbox");
+  lb.querySelector("img").src = img.src;
+  lb.querySelector(".lb-cap").textContent = img.closest(".thumb, figure")?.innerText.replace(/\s+/g, " ").trim() ?? "";
+  lb.classList.remove("hidden");
+});
+$("#lightbox").addEventListener("click", () => $("#lightbox").classList.add("hidden"));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#lightbox").classList.add("hidden"); });
+
+// ---------- tooltip pentru grafice ----------
+document.addEventListener("mousemove", (e) => {
+  const t = e.target.closest("[data-tip]"), tip = $("#tip");
+  if (!t) return tip.classList.add("hidden");
+  tip.innerHTML = t.dataset.tip;
+  tip.classList.remove("hidden");
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  tip.style.left = `${x}px`; tip.style.top = `${e.clientY + 14}px`;
+});
+
 const DX = { asset_puternic: "Asset puternic", tradator: "Element trădător", decor: "Decor", neutru: "Neutru" };
 
 let brands = [];
@@ -48,7 +75,7 @@ async function loadData() {
   brands = b;
   const ids = brands.map((x) => x.id);
   const { data: a } = ids.length
-    ? await sb.from("ads").select("*").in("brand_id", ids).order("created_at", { ascending: false })
+    ? await sb.from("ads").select("id,brand_id,title,role,image_path,sha256,created_at").in("brand_id", ids).order("created_at", { ascending: false })
     : { data: [] };
   ads = a ?? [];
   const bn = (id) => brands.find((x) => x.id === id)?.name;
@@ -86,16 +113,22 @@ $("#ad-form").addEventListener("submit", async (e) => {
   const brand_id = $("#ad-brand").value;
   if (!brand_id) return alert("Adaugă întâi un brand.");
   $("#ad-status").textContent = `Se încarcă ${files.length} imagini…`;
+  const skipped = [];
   for (const orig of files) {
     const f = await scaleFile(orig);
+    const sha256 = await sha(f);
+    const dup = ads.find((a) => a.sha256 === sha256);
+    if (dup) { skipped.push(`${orig.name} (există deja la ${brands.find((b) => b.id === dup.brand_id)?.name}, ${dup.role === "memory" ? "memorie" : "test"})`); continue; }
     const ext = f.type === "image/png" ? "png" : f.type === "image/webp" ? "webp" : "jpg";
     const path = `ads/${crypto.randomUUID()}.${ext}`;
     const up = await sb.storage.from("ads").upload(path, f, { contentType: f.type });
     if (up.error) { $("#ad-status").textContent = up.error.message; return; }
-    const { error } = await sb.from("ads").insert({ brand_id, role: $("#ad-role").value, title: $("#ad-title").value || null, image_path: path });
+    const { error } = await sb.from("ads").insert({ brand_id, role: $("#ad-role").value, title: $("#ad-title").value || null, image_path: path, sha256 });
     if (error) { $("#ad-status").textContent = error.message; return; }
   }
-  $("#ad-status").textContent = "Gata.";
+  $("#ad-status").textContent = skipped.length
+    ? `Gata. Sărite, pentru că aceeași imagine nu poate fi și memorie, și test: ${skipped.join("; ")}.`
+    : "Gata.";
   e.target.reset();
   loadData();
 });
@@ -280,7 +313,7 @@ $("#run").addEventListener("click", async () => {
 async function showResult(el, analysisId, controlId) {
   const [{ data: a }, { data: vs }, { data: imp }] = await Promise.all([
     sb.from("analyses").select("*, ads(*, brands(*))").eq("id", analysisId).single(),
-    sb.from("variants").select("*").eq("analysis_id", analysisId).order("created_at"),
+    sb.from("variants").select("id,kind,element,image_path,status,attribution,attribution_sd,distribution,created_at").eq("analysis_id", analysisId).order("created_at"),
     sb.from("element_impacts").select("*").eq("analysis_id", analysisId).order("delta", { ascending: false }),
   ]);
   let ctrl = null;
@@ -324,10 +357,81 @@ async function showResult(el, analysisId, controlId) {
         <td><span class="dx ${i.diagnosis}">${DX[i.diagnosis]}</span></td></tr>`;
     }).join("")}</tbody></table>
     <p class="muted">Praguri: asset Δ &gt; ${s.thresholds.asset}, decor |Δ| &lt; ${s.thresholds.decor}, trădător dacă atrage &gt; ${pct(s.thresholds.traitor)} spre un concurent.</p>` : ""}
+    ${charts({ a, vs, imp, target, s })}
     <h3>Variante testate</h3>
     <div class="variants">${vs.map((v) => `<figure><img src="${imgUrl(v.image_path)}" loading="lazy" alt="" />
       <figcaption><b>${v.kind === "base" ? "Bază (mascat)" : v.kind === "ablation" ? "Fără: " + esc(v.element) : "Generată: " + esc(v.element)}</b><br>
       ${pct(v.attribution)} ±${pct(v.attribution_sd)}${v.kind === "generated" && base ? ` · ${v.attribution - base.attribution >= 0 ? "+" : ""}${Math.round((v.attribution - base.attribution) * 100)} pp` : ""}</figcaption></figure>`).join("")}</div>`;
+}
+
+// Culoarea urmează brandul (ordine fixă, alfabetică), nu poziția în clasament
+const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
+function brandColors(names) {
+  const sorted = [...names].filter((n) => n !== "nu știu").sort((x, y) => x.localeCompare(y, "ro"));
+  const m = Object.fromEntries(sorted.map((n, i) => [n, `var(${SLOTS[i % SLOTS.length]})`]));
+  m["nu știu"] = "var(--unk)";
+  return m;
+}
+const vname = (v) => (v.kind === "base" ? "Bază (logo mascat)" : v.kind === "ablation" ? `Fără: ${v.element}` : `Generată: ${v.element}`);
+
+function charts({ a, vs, imp, target, s }) {
+  const done = vs.filter((v) => v.distribution);
+  if (!done.length) return "";
+  const names = [...new Set(done.flatMap((v) => Object.keys(v.distribution)))];
+  const col = brandColors(names);
+  const order = [target, ...names.filter((n) => n !== target && n !== "nu știu").sort((x, y) => x.localeCompare(y, "ro")), "nu știu"]
+    .filter((n) => names.includes(n));
+  const legend = `<div class="legend">${order.map((n) => `<span><i style="background:${col[n]}"></i>${esc(n)}${n === target ? " (brandul testat)" : ""}</span>`).join("")}</div>`;
+
+  // 1) Distribuția voturilor pe fiecare variantă
+  const rows = done.map((v) => `<div class="srow"><span class="lbl" title="${esc(vname(v))}">${esc(vname(v))}</span>
+    <div class="stack">${order.map((n) => {
+      const p = v.distribution[n] ?? 0;
+      return p > 0.004 ? `<span style="width:${(p * 100).toFixed(2)}%;background:${col[n]}" data-tip="<b>${esc(vname(v))}</b><br>${esc(n)}: ${pct(p)}"></span>` : "";
+    }).join("")}</div><span class="val" data-tip="Atribuire corectă ± abatere standard">${pct(v.attribution)}</span></div>`).join("");
+  let html = `<div class="viz"><h3>Cui atribuie panelul fiecare variantă</h3>
+    <p class="sub">Fiecare bară = 100% din probabilitatea panelului. Cifra din dreapta = atribuirea corectă către ${esc(target)}.</p>
+    ${legend}${rows}
+    <div class="axis"><span></span><div class="ticks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><span></span></div></div>`;
+
+  // 2) Impactul elementelor (Δ), divergent în jurul lui 0
+  if (imp.length) {
+    const max = Math.max(0.3, ...imp.map((i) => Math.abs(i.delta))) * 1.05;
+    const xp = (d) => 50 + (d / max) * 50;
+    html += `<div class="viz"><h3>Ce element poartă brandul</h3>
+      <p class="sub">Δ = cât scade atribuirea corectă când elementul e scos. Spre dreapta: elementul ajută brandul. Spre stânga: fără el, brandul e recunoscut mai bine. Linia punctată = pragul de asset (Δ ${s.thresholds.asset}).</p>
+      <div class="legend"><span><i style="background:var(--pos)"></i>ajută recunoașterea</span><span><i style="background:var(--neg)"></i>încurcă recunoașterea</span></div>
+      ${imp.map((i) => {
+        const [tb, tp] = Object.entries(i.pull_shift).sort((x, y) => y[1] - x[1])[0] ?? ["—", 0];
+        const w = Math.abs(xp(i.delta) - 50), pos = i.delta >= 0;
+        const tip = `<b>${esc(i.element)}</b><br>Δ ${i.delta >= 0 ? "+" : ""}${i.delta.toFixed(2)}<br>${tp > 0.01 ? `Atrage spre ${esc(tb)}: +${pct(tp)}<br>` : ""}Citat ca indiciu: ${pct(i.cue_rate)}`;
+        return `<div class="drow"><span class="lbl">${esc(i.element)}</span><div class="dtrack" data-tip="${tip}">
+          <span class="thr" style="left:${xp(s.thresholds.asset)}%"></span><span class="zero"></span>
+          <span class="bar ${pos ? "pos" : "neg"}" style="${pos ? `left:50%` : `left:${50 - w}%`};width:${w}%"></span></div>
+          <span><span class="dx ${i.diagnosis}">${DX[i.diagnosis]}</span> ${i.delta >= 0 ? "+" : ""}${i.delta.toFixed(2)}</span></div>`;
+      }).join("")}
+      <div class="axis d"><span></span><div class="ticks"><span>−${max.toFixed(2)}</span><span>0</span><span>+${max.toFixed(2)}</span></div><span></span></div></div>`;
+  }
+
+  // 3) Similaritate vizuală cu fiecare brand (embeddings)
+  const sim = a.similarity;
+  if (sim?.per_brand && Object.keys(sim.per_brand).length) {
+    const vals = Object.values(sim.per_brand).concat(sim.typical ?? []);
+    const lo = Math.max(0, Math.min(...vals) - 0.05), hi = Math.min(1, Math.max(...vals) + 0.03);
+    const xp = (v) => ((v - lo) / (hi - lo)) * 100;
+    const ents = Object.entries(sim.per_brand).sort((x, y) => y[1] - x[1]);
+    html += `<div class="viz"><h3>Cu cine seamănă vizual reclama mascată</h3>
+      <p class="sub">Similaritate cosinus între embedding-ul reclamei mascate și reclamele fiecărui brand (${esc(sim.model)}). Linia punctată = cât de asemănătoare sunt în medie reclamele din categorie între ele.
+      ${sim.generic ? `<b>Reclamă generică:</b> seamănă cu concurența peste nivelul tipic al categoriei.` : sim.generic === false ? "Reclama se distinge de categorie." : ""}</p>
+      ${ents.map(([b, v]) => `<div class="srow"><span class="lbl">${esc(b)}${b === target ? " (propriu)" : ""}</span>
+        <div class="dots">${sim.typical != null ? `<span class="typ" style="left:${xp(sim.typical)}%" data-tip="Tipic în categorie: ${sim.typical.toFixed(3)}"></span>` : ""}
+        <span class="dot" style="left:${xp(v)}%;background:${col[b] ?? "var(--unk)"}" data-tip="<b>${esc(b)}</b><br>similaritate ${v.toFixed(3)}"></span></div>
+        <span class="val">${v.toFixed(2)}</span></div>`).join("")}
+      <div class="axis"><span></span><div class="ticks"><span>${lo.toFixed(2)}</span><span>${hi.toFixed(2)}</span></div><span></span></div></div>`;
+  } else if (sim?.error) {
+    html += `<p class="muted">Similaritatea nu s-a putut calcula: ${esc(sim.error)}</p>`;
+  }
+  return html;
 }
 
 async function loadHistory() {

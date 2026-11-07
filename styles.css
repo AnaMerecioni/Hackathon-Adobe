@@ -36,7 +36,7 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.75rem; }
 .gallery.small { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
 .thumb { border: 2px solid transparent; border-radius: 8px; overflow: hidden; background: var(--bg); cursor: default; font-size: 0.75rem; }
-.thumb img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.thumb img { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; background: #ebe8e2; cursor: zoom-in; }
 .thumb div { padding: 0.3rem 0.4rem; }
 .gallery.small .thumb { cursor: pointer; } .thumb.selected { border-color: var(--accent); }
 .tag { display: inline-block; padding: 0 0.4rem; border-radius: 4px; background: var(--ink); color: #fff; font-size: 0.7rem; }
@@ -69,8 +69,44 @@ th { color: var(--muted); font-weight: 500; }
 .report { white-space: pre-wrap; line-height: 1.55; background: var(--bg); border-radius: 8px; padding: 1rem; }
 .variants { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.75rem; }
 .variants figure { margin: 0; font-size: 0.8rem; }
-.variants img { width: 100%; border-radius: 6px; display: block; }
+.variants img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #ebe8e2; border-radius: 6px; display: block; cursor: zoom-in; }
 .hist-item { display: flex; justify-content: space-between; gap: 1rem; padding: 0.6rem 0; border-bottom: 1px solid var(--line); cursor: pointer; }
 .hist-item:hover { color: var(--accent); }
 .err { color: var(--bad); }
-footer { text-align: center; padding: 1rem 0 2rem; }
+
+
+/* mărire imagine */
+.lightbox { position: fixed; inset: 0; background: #000c; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 0.75rem; z-index: 50; cursor: zoom-out; padding: 2rem; }
+.lightbox img { max-width: 100%; max-height: calc(100vh - 6rem); border-radius: 8px; background: #fff; }
+.lb-cap { color: #fff; font-size: 0.9rem; }
+.gallery.small .thumb img { cursor: pointer; }
+
+/* grafice */
+.viz { --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300; --s7:#6250d6; --s8:#e34948;
+  --unk:#c9c6bf; --pos:#6250d6; --neg:#d1495b; --grid:#e3dfd8; margin-top: 1.25rem; }
+.viz h3 { margin: 0 0 0.25rem; }
+.viz .sub { color: var(--muted); font-size: 0.8rem; margin: 0 0 0.75rem; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.6rem; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.35rem; vertical-align: -1px; }
+.srow { display: grid; grid-template-columns: 170px 1fr 48px; align-items: center; gap: 0.6rem; font-size: 0.82rem; margin-bottom: 6px; }
+.srow .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.stack { display: flex; gap: 2px; height: 18px; }
+.stack span { display: block; height: 100%; min-width: 0; }
+.stack span:first-child { border-radius: 4px 0 0 4px; } .stack span:last-child { border-radius: 0 4px 4px 0; }
+.drow { display: grid; grid-template-columns: 170px 1fr 150px; align-items: center; gap: 0.6rem; font-size: 0.82rem; margin-bottom: 6px; }
+.dtrack { position: relative; height: 18px; }
+.dtrack .zero { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--muted); }
+.dtrack .thr { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1px dashed var(--muted); opacity: 0.6; }
+.dtrack .bar { position: absolute; top: 2px; height: 14px; }
+.dtrack .bar.pos { background: var(--pos); border-radius: 0 4px 4px 0; }
+.dtrack .bar.neg { background: var(--neg); border-radius: 4px 0 0 4px; }
+.axis { display: grid; grid-template-columns: 170px 1fr 48px; gap: 0.6rem; font-size: 0.72rem; color: var(--muted); }
+.axis.d { grid-template-columns: 170px 1fr 150px; }
+.axis .ticks { display: flex; justify-content: space-between; }
+.dots { position: relative; height: 20px; border-bottom: 1px solid var(--grid); }
+.dots .dot { position: absolute; top: 4px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
+.dots .typ { position: absolute; top: -2px; bottom: -2px; border-left: 1px dashed var(--muted); }
+.tip { position: fixed; z-index: 60; pointer-events: none; background: var(--ink); color: #fff; font-size: 0.78rem;
+  padding: 0.4rem 0.55rem; border-radius: 6px; max-width: 260px; line-height: 1.35; }
