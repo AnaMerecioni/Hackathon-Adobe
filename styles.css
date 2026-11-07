@@ -325,3 +325,5 @@ ol.ranking li.orig { color: var(--muted); list-style: none; margin-left: -1.2rem
 .typing{display:inline-flex;gap:3px;margin-top:.4rem}.typing i{width:6px;height:6px;border-radius:50%;background:#bbb;animation:tp 1s infinite}
 .typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
 @keyframes tp{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+
+.kpis .plain{font-size:.85rem;color:#555;margin-top:.2rem;line-height:1.35}

@@ -360,7 +360,8 @@ export async function faceOffEval(d: Deps, rebrandId: string, i: number) {
   const { data: a } = await d.supabase.from("analyses").select("category").eq("id", rb.analysis_id).single();
   const { data: base } = await d.supabase.from("variants").select("image_path").eq("analysis_id", rb.analysis_id).eq("kind", "base").single();
   const dirs = (rb.result?.directii ?? []).slice(0, 3), seg = setup.segmente?.[p.segment] ?? {};
-  const options = ["Reclama actuală (imaginea atașată; logo-ul e acoperit cu gri).",
+  const desc = [rb.result?.diagnostic, (rb.result?.coduri_comune ?? []).length ? `Elemente: ${rb.result.coduri_comune.join(", ")}.` : ""].filter(Boolean).join(" ");
+  const options = [`Reclama actuală (imaginea atașată, dacă o vezi; logo-ul e acoperit cu gri).${desc ? ` Descriere: ${desc}` : ""}`,
     ...dirs.map((x: any, k: number) => `Concept ${k + 1} „${x.titlu}”: headline „${x.text_nou}”. ${x.descriere} Culori: ${(x.culori ?? []).join(", ")}.` +
       (rb.result?.mascota?.nume ? ` Apare mascota „${rb.result.mascota.nume}”.` : ""))];
   const schema = { type: "object", properties: {
@@ -466,6 +467,7 @@ export async function similarityHeatmap(d: Deps, analysisId: string) {
     ].join("\n") }] },
     contents: [{ role: "user", parts }],
     generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 1500 },
+    __vision: true,
   });
   let zone: any[] = [];
   try { zone = (JSON.parse(t.replace(/^```(json)?|```$/g, "")).zone ?? []).filter((z: any) => z.box?.length === 4).slice(0, 8)

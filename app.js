@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071540";
+const APP_VERSION = "202611071545";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -576,10 +576,24 @@ function compactStats({ a, s, vs, imp, target }) {
     ["Putere statistică", `n = ${P.n_per_variant} evaluări/variantă`, `efect minim detectabil ≈ ${Math.round((P.mde ?? 0) * 100)} pp`,
       (P.mde ?? 1) <= 0.15 ? "good" : "warn"],
   ];
+  const att = s.attribution ?? 0, lo = s.attribution_ci?.[0];
+  const plain = [
+    s.above_chance ? `Fără logo, ${pct(att)} dintre răspunsuri spun brandul corect. Clar mai bine decât ghicit.`
+      : `Fără logo, doar ${pct(att)} spun brandul corect. Nu se deosebește de ghicit.`,
+    t1.n ? `${t1.k} din ${t1.n} evaluatori au ales brandul tău primul.` : "",
+    conf ? (conf[1].mean > 0.25 ? `Reclama e luată des drept ${esc(conf[0])}: lucrează pentru concurent.` : `Aproape nimeni n-o confundă cu ${esc(conf[0])}.`) : "",
+    top ? ({ asset_puternic: `„${esc(top.element)}” e semnul după care oamenii recunosc brandul: păstrează-l.`,
+      tradator: `„${esc(top.element)}” trage spre concurent: schimbă-l.`, decor: `„${esc(top.element)}” nu contează pentru recunoaștere.`,
+      neconcludent: `„${esc(top.element)}” pare să conteze, dar datele nu sunt sigure încă.` }[top.diagnosis] ?? `„${esc(top.element)}” are efect mic.`)
+      : "Încă nu știi DE CE e recunoscută: marchează elemente în editor (sticla, fundalul, textul).",
+    leak ? "Numele brandului se vede în reclamă: acoperă-l, altfel testul nu e corect." : "Numele brandului nu se vede; răspunsurile sunt de încredere.",
+    (P.mde ?? 1) > 0.2 ? `Cu ${P.n_per_variant} evaluări vezi doar diferențe mari (peste ${Math.round((P.mde ?? 0) * 100)} pp). Pune 20–30 ca să prinzi și efecte mici.`
+      : "Eșantionul e suficient ca să vezi și diferențe mici.",
+  ];
   const chart = imp.length ? statsView({ a, s, vs, imp, target, part: "chart2" }) : statsView({ a, s, vs, imp, target, part: "chart1" });
   return `<div class="compact">
     <h3>Analiza statistică pe scurt</h3>
-    <table class="kpis"><tbody>${rows.map(([k, v, note, tone]) => `<tr><th>${k}</th><td>${v}</td><td><span class="chip ${tone}">${esc(note)}</span></td></tr>`).join("")}</tbody></table>
+    <table class="kpis"><tbody>${rows.map(([k, v, note, tone], i) => `<tr><th>${k}</th><td>${v}${plain[i] ? `<div class="plain">${plain[i]}</div>` : ""}</td><td><span class="chip ${tone}">${esc(note)}</span></td></tr>`).join("")}</tbody></table>
     ${chart}
     <p class="note">IC = interval de încredere 95% (bootstrap). p corectat Holm; * p&lt;.05, ** p&lt;.01, *** p&lt;.001. g = mărimea efectului (Hedges).
       <a href="#" data-toggle-full>Toate tabelele și graficele</a></p>
@@ -1140,18 +1154,14 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
     <h3>Rebranding propus${r.concurent ? ` · departe de ${esc(r.concurent)}` : ""}</h3>
     <p class="sum-text">${esc(r.diagnostic)}</p>
     ${r.coduri_comune?.length ? `<div class="chips-row"><span class="muted small">Coduri comune cu concurentul:</span>${r.coduri_comune.map((c) => `<span class="chip warn">${esc(c)}</span>`).join("")}</div>` : ""}
-    <div class="palette">${(r.paleta ?? []).map((p) => `<button type="button" class="sw-big" data-copy="${esc(p.hex)}" title="Copiază ${esc(p.hex)}">
-      <span style="background:${esc(p.hex)}"></span><b>${esc(p.nume)}</b><small>${esc(p.hex)} · ${esc(p.rol)}</small></button>`).join("")}</div>
     <div class="grid2 keep-change">
       <div><h4>Păstrezi</h4><ul>${(r.pastrezi ?? []).map((x) => `<li>✓ ${esc(x)}</li>`).join("")}</ul></div>
       <div><h4>Schimbi</h4><ul>${(r.schimbi ?? []).map((x) => `<li>→ ${esc(x)}</li>`).join("")}</ul></div>
     </div>
-    ${r.mascota?.svg ? `<div class="mascot-row"><div class="mascot">${mascotSvg(r.mascota.svg, (r.directii?.[0]?.culori ?? []).map(hexRgb).filter(Boolean).sort((p, q) => lum(p) - lum(q))) || ""}</div>
-      <div><h4>Mascota propusă: ${esc(r.mascota.nume)}</h4><p class="muted small">${esc(r.mascota.descriere)}</p></div></div>` : ""}
     ${r.a_functionat?.length ? `<div class="chips-row"><span class="muted small">A funcționat în alte reclame ale brandului:</span>${r.a_functionat.map((w) => `<span class="chip good">${esc(w.element)} +${Math.round(w.delta * 100)} pp</span>`).join("")}</div>` : ""}
     <div class="dirs">${(r.directii ?? []).map((d, i) => `<div class="dir">
-      ${conceptCard(d, r, i)}
-      ${(d.culori ?? []).length ? `<div class="mini-pal">${d.culori.map((h) => `<span style="background:${esc(h)}" title="${esc(h)}"></span>`).join("")}</div>` : ""}
+
+
       <div class="dir-body"><div class="dir-head"><b>${esc(d.titlu)}</b><span class="chip ${RISK[d.risc] ?? ""}">${esc(d.risc)}</span></div>
         <p>${esc(d.descriere)}</p>
         ${d.text_nou ? `<p class="new-copy">„${esc(d.text_nou)}”</p>` : ""}
@@ -1161,8 +1171,7 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
         ${d.imprumutat?.length ? `<div class="ks"><div><b>Reutilizat</b>${d.imprumutat.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div></div>` : ""}
         <p class="muted small"><b>De ce e distinct:</b> ${esc(d.de_ce_distinct)}</p>
         ${d.legatura_cu_identitatea ? `<p class="muted small"><b>Identitate:</b> ${esc(d.legatura_cu_identitatea)}</p>` : ""}
-        <details><summary>Brief pentru designer</summary><p class="small">${esc(d.prompt_imagine)}</p>
-          <button type="button" class="ghost sm" data-copy="${esc(d.prompt_imagine)}">Copiază brief-ul</button></details>
+
       </div></div>`).join("")}</div>
     <div class="fo"><div class="fo-head"><h3>🎭 Face Off: publicul tău alege</h3>
       <p class="muted small">12 persoane extrase pe cotele populației României (vârstă, sex, mediu, regiune), fiecare cu un tipar de cumpărare preluat din ce spun
@@ -1217,7 +1226,7 @@ async function runFaceOff(box, r, rbId, btn) {
         ${a.ce_schimbi ? `<span class="chip warn">ar schimba: ${esc(a.ce_schimbi)}</span>` : ""}</div>`);
       st.textContent = `Panelul răspunde: ${++done} / ${setup.personas.length}`;
     };
-    await Promise.all([0, 1, 2].map(async () => { while (next < setup.personas.length) await one(next++); }));
+    await Promise.all([0, 1].map(async () => { while (next < setup.personas.length) await one(next++); }));
     st.textContent = "Calculez rezultatul ponderat…";
     const res = await invoke({ action: "face_off_save", rebrand_id: rbId, answers });
     r.face_off = res;

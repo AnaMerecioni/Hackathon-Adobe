@@ -149,20 +149,30 @@ async function chatCall(url: string, key: string, payload: any, label: string): 
   }
   throw new Error(`${label}: prea multe cereri, încearcă peste un minut.`);
 }
-async function fallback(body: any, why: string): Promise<string> {
+// needsVision: cererea nu are sens fără imagine (panelul orb, heatmap). Altfel, la nevoie, trimitem doar textul.
+async function fallback(body: any, why: string, needsVision = false): Promise<string> {
   const img = hasImages(body);
+  let last: unknown = null;
   if (env("GROQ_API_KEY")) {
     try { return await chatCall("https://api.groq.com/openai/v1/chat/completions", env("GROQ_API_KEY"), toChat(body, GROQ_MODEL(), img), "Groq"); }
-    catch (e) { if (!env("DEEPSEEK_API_KEY") || img) throw e; }
+    catch (e) { last = e; }
   }
-  if (env("DEEPSEEK_API_KEY") && !img) return await chatCall("https://api.deepseek.com/chat/completions", env("DEEPSEEK_API_KEY"), toChat(body, DEEPSEEK_MODEL(), false), "DeepSeek");
-  throw new Error(why + (img ? " Pentru evaluările cu imagini adaugă secretul GROQ_API_KEY (gratuit, console.groq.com/keys)."
-    : " Adaugă secretul GROQ_API_KEY (gratuit) sau DEEPSEEK_API_KEY în Supabase."));
+  if (needsVision && img) throw new Error(why + " Pentru analizele cu imagini adaugă secretul GROQ_API_KEY (gratuit, console.groq.com/keys) sau așteaptă resetarea cotei Gemini." +
+    (last ? ` (${last instanceof Error ? last.message.slice(0, 120) : ""})` : ""));
+  if (env("DEEPSEEK_API_KEY")) {
+    try { return await chatCall("https://api.deepseek.com/chat/completions", env("DEEPSEEK_API_KEY"), toChat(body, DEEPSEEK_MODEL(), false), "DeepSeek"); }
+    catch (e) { last = e; }
+  }
+  // ultima rezervă: Pollinations, gratuit, fără cheie (doar text)
+  try { return await chatCall("https://text.pollinations.ai/openai", "anonim", toChat(body, env("POLLINATIONS_TEXT_MODEL") || "openai", false), "Pollinations"); }
+  catch (e) { throw new Error(`${why} Nici furnizorii de rezervă n-au răspuns: ${e instanceof Error ? e.message.slice(0, 160) : e}`); }
 }
 
 async function gemini(body: Record<string, unknown>, attempt = 0): Promise<string> {
+  const needsVision = !!body.__vision;
+  if ("__vision" in body) { body = { ...body }; delete (body as any).__vision; }
   const key = geminiKey();
-  if (!key || Date.now() < geminiBlockedUntil) return fallback(body, "Gemini nu e disponibil acum (cotă epuizată).");
+  if (!key || Date.now() < geminiBlockedUntil) return fallback(body, "Gemini nu e disponibil acum (cotă epuizată).", needsVision);
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
     method: "POST",
     headers: { "x-goog-api-key": key, "content-type": "application/json" },
@@ -171,7 +181,7 @@ async function gemini(body: Record<string, unknown>, attempt = 0): Promise<strin
   if (res.status === 429) {
     const t = await res.clone().text();
     // cotă epuizată (zilnică sau a planului): trecem direct pe furnizorul de rezervă
-    if (/quota|PerDay|per day|daily|billing/i.test(t)) { geminiBlockedUntil = Date.now() + 10 * 60_000; return fallback(body, "Cota gratuită Gemini s-a terminat."); }
+    if (/quota|PerDay|per day|daily|billing/i.test(t)) { geminiBlockedUntil = Date.now() + 10 * 60_000; return fallback(body, "Cota gratuită Gemini s-a terminat.", needsVision); }
   }
   if ((res.status === 429 || res.status >= 500) && attempt < 3) {
     let wait = 2000 * 2 ** attempt;
@@ -181,9 +191,9 @@ async function gemini(body: Record<string, unknown>, attempt = 0): Promise<strin
       if (d) wait = Math.max(wait, parseFloat(d) * 1000);
     } catch { /* ignorăm */ }
     await new Promise((r) => setTimeout(r, Math.min(wait, 15000) + Math.random() * 500));
-    return gemini(body, attempt + 1);
+    return gemini(needsVision ? { ...body, __vision: true } : body, attempt + 1);
   }
-  if (res.status === 429 || res.status >= 500) return fallback(body, `Gemini API ${res.status}.`);
+  if (res.status === 429 || res.status >= 500) return fallback(body, `Gemini API ${res.status}.`, needsVision);
   if (!res.ok) throw new Error(`Gemini API ${res.status}: ${(await res.text()).slice(0, 400)}`);
   const j = await res.json();
   const parts = j?.candidates?.[0]?.content?.parts ?? [];
@@ -220,7 +230,7 @@ async function geminiRaw(body: Record<string, unknown>): Promise<any> {
       }
     } catch { /* trecem pe varianta fără căutare */ }
   }
-  return wrap(await fallback(plain, "Căutarea web nu e disponibilă acum."));
+  return wrap(await fallback(plain, "Căutarea web nu e disponibilă acum.", false));
 }
 
 async function pool<T, R>(items: T[], n: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
@@ -349,6 +359,7 @@ async function runVariant(variantId: string, cont = false) {
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts }],
       generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 1024 },
+      __vision: true,
     });
     let input: any = { probabilities: [], cues: [], text_vizibil: [] };
     let valid = true;
