@@ -109,6 +109,8 @@ const env = (k: string) => (Deno.env.get(k) ?? "").trim().replace(/^["'`]+|["'`]
 const GROQ_MODEL = () => env("GROQ_MODEL") || "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_SEARCH_MODEL = () => env("GROQ_SEARCH_MODEL") || "groq/compound-mini";
 const DEEPSEEK_MODEL = () => env("DEEPSEEK_MODEL") || "deepseek-chat";
+const COHERE_VISION_MODEL = () => env("COHERE_VISION_MODEL") || "command-a-vision-07-2025";
+const COHERE_TEXT_MODEL = () => env("COHERE_MODEL") || "command-a-03-2025";
 let geminiBlockedUntil = 0;
 const hasImages = (body: any) => JSON.stringify(body.contents ?? []).includes('"inline_data"');
 
@@ -164,7 +166,13 @@ async function fallback(body: any, why: string, needsVision = false): Promise<st
     try { return await chatCall("https://api.groq.com/openai/v1/chat/completions", env("GROQ_API_KEY"), toChat(body, GROQ_MODEL(), img), "Groq"); }
     catch (e) { last = e; }
   }
-  if (needsVision && img) throw new Error(why + " Pentru analizele cu imagini adaugă secretul GROQ_API_KEY (gratuit, console.groq.com/keys) sau așteaptă resetarea cotei Gemini." +
+  // Cohere (cheie de test gratuită): Command A Vision vede imagini, Command A pentru text
+  if (env("COHERE_API_KEY")) {
+    try { return await chatCall("https://api.cohere.ai/compatibility/v1/chat/completions", env("COHERE_API_KEY"),
+      toChat(body, img ? COHERE_VISION_MODEL() : COHERE_TEXT_MODEL(), img), "Cohere"); }
+    catch (e) { last = e; }
+  }
+  if (needsVision && img) throw new Error(why + " Pentru analizele cu imagini adaugă secretul COHERE_API_KEY sau GROQ_API_KEY (gratuit, console.groq.com/keys) sau așteaptă resetarea cotei Gemini." +
     (last ? ` (${last instanceof Error ? last.message.slice(0, 120) : ""})` : ""));
   if (env("DEEPSEEK_API_KEY")) {
     try { return await chatCall("https://api.deepseek.com/chat/completions", env("DEEPSEEK_API_KEY"), toChat(body, DEEPSEEK_MODEL(), false), "DeepSeek"); }
@@ -666,8 +674,8 @@ Deno.serve(async (req) => {
       geminiOk = r.ok;
       if (r.status === 429) geminiBlockedUntil = Date.now() + 10 * 60_000;
     }
-    const groq = !!env("GROQ_API_KEY"), deepseek = !!env("DEEPSEEK_API_KEY");
-    return json({ gemini: geminiOk, groq, deepseek, groq_model: GROQ_MODEL(), slow: !geminiOk && !groq && !deepseek });
+    const groq = !!env("GROQ_API_KEY"), deepseek = !!env("DEEPSEEK_API_KEY"), cohere = !!env("COHERE_API_KEY");
+    return json({ gemini: geminiOk, groq, cohere, deepseek, groq_model: GROQ_MODEL(), slow: !geminiOk && !groq && !cohere && !deepseek });
   }
   try {
     if (body.action === "diag") {
