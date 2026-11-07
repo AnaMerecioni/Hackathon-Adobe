@@ -199,3 +199,12 @@ ul.plain li.good .ic { background: var(--good); } ul.plain li.bad .ic { backgrou
 button.ghost { background: transparent; border: 1px solid var(--ink); padding: 0.6rem 1.2rem; border-radius: 999px; font-weight: 600; }
 .stats-details { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
 ul.plain li { color: var(--ink); font-size: 0.92rem; }
+
+.compact h3 { margin: 0 0 0.6rem; }
+table.kpis { border-top: 2px solid var(--ink); border-bottom: 2px solid var(--ink); }
+table.kpis th { width: 26%; font-weight: 600; color: var(--ink); white-space: nowrap; }
+table.kpis td { font-variant-numeric: tabular-nums; }
+table.kpis td:last-child { text-align: right; white-space: nowrap; }
+.compact .viz { margin-top: 1rem; }
+.full-details { margin-top: 1rem; border-top: 1px dashed var(--line); padding-top: 1rem; }
+@media (max-width: 700px) { table.kpis th { white-space: normal; } table.kpis td:last-child { white-space: normal; text-align: left; } }

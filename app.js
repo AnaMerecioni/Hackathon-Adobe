@@ -1,10 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071247";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071252";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071247";
+const APP_VERSION = "202611071252";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -400,13 +400,20 @@ async function showResult(el, analysisId, controlId) {
 
   if (s.version === 2) {
     el.innerHTML = summaryView({ a, s, imp, target }) +
-      `<div class="details-toggle"><button type="button" class="ghost" data-toggle-stats>📊 Vezi analiza statistică completă</button></div>
-       <div class="stats-details hidden">${statsView({ a, s, vs, imp, target, ctrl })}</div>`;
+      `<div class="details-toggle"><button type="button" class="ghost" data-toggle-stats>📊 Vezi analiza statistică</button></div>
+       <div class="stats-details hidden">${compactStats({ a, s, vs, imp, target })}
+         <div class="full-details hidden">${statsView({ a, s, vs, imp, target, ctrl })}</div></div>`;
     const btn = el.querySelector("[data-toggle-stats]"), box = el.querySelector(".stats-details");
     btn.addEventListener("click", () => {
       const open = box.classList.toggle("hidden") === false;
-      btn.textContent = open ? "Ascunde analiza statistică" : "📊 Vezi analiza statistică completă";
+      btn.textContent = open ? "Ascunde analiza statistică" : "📊 Vezi analiza statistică";
       if (open) box.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    el.querySelector("[data-toggle-full]").addEventListener("click", (e) => {
+      e.preventDefault();
+      const full = el.querySelector(".full-details");
+      const open = full.classList.toggle("hidden") === false;
+      e.target.textContent = open ? "Ascunde detaliile" : "Toate tabelele și graficele";
     });
     return;
   }
@@ -528,6 +535,38 @@ function reportHtml(report) {
     `<section class="rs ${k}"><h4>${t}</h4><p>${esc(r[k])}</p></section>`).join("")}</div>`;
 }
 
+// Statistica pe scurt: 6 indicatori + un grafic (forest plot dacă există elemente, altfel atribuirea cu IC)
+function compactStats({ a, s, vs, imp, target }) {
+  const P = s.profile ?? {}, t1 = P.top1_agreement ?? {};
+  const chanceTxt = P.chance != null ? `${Math.round(P.chance * 100)}%` : "—";
+  const conf = Object.entries(s.confusion ?? {}).sort((x, y) => y[1].mean - x[1].mean)[0];
+  const top = [...imp].sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta))[0];
+  const st = top?.stats ?? {};
+  const leak = P.leak?.rate >= 0.3;
+  const rows = [
+    ["Atribuire corectă", `${pct(s.attribution)}, IC 95% ${pctCI(s.attribution_ci)}`,
+      s.above_chance ? `peste nivelul șansei (${chanceTxt})` : `nu se distinge de șansă (${chanceTxt})`, s.above_chance ? "good" : "bad"],
+    ["Acord între evaluatori", t1.n ? `${t1.k}/${t1.n} (${pct(t1.rate)}), IC ${pctCI(t1.ci)}` : "—",
+      "aleg brandul corect pe primul loc", t1.rate >= 0.7 ? "good" : t1.rate >= 0.4 ? "warn" : "bad"],
+    ["Confuzie principală", conf ? `${esc(conf[0])}: ${pct(conf[1].mean)}, IC ${pctCI(conf[1].ci)}` : "—",
+      "probabilitatea dată concurentului", conf && conf[1].mean > 0.25 ? "bad" : "good"],
+    ["Cel mai puternic element", top ? `${esc(top.element)}: Δ ${sgn(top.delta)}, p ${fmtP(st.p_holm)} ${starsOf(st.p_holm)}, g ${Number.isFinite(st.g) ? st.g.toFixed(2) : "—"}` : "nu au fost testate elemente",
+      top ? DX[top.diagnosis] : "adaugă elemente în editor", top ? ({ asset_puternic: "good", tradator: "bad", neconcludent: "warn" }[top.diagnosis] ?? "") : ""],
+    ["Calitatea datelor", leak ? `mascare incompletă (${pct(P.leak.rate)} au citit numele)` : `mascare OK · ${P.n_invalid ?? 0} voturi invalide`,
+      leak ? "rezultat nevalid" : "date utilizabile", leak ? "bad" : (P.n_invalid ? "warn" : "good")],
+    ["Putere statistică", `n = ${P.n_per_variant} evaluări/variantă`, `efect minim detectabil ≈ ${Math.round((P.mde ?? 0) * 100)} pp`,
+      (P.mde ?? 1) <= 0.15 ? "good" : "warn"],
+  ];
+  const chart = imp.length ? statsView({ a, s, vs, imp, target, part: "chart2" }) : statsView({ a, s, vs, imp, target, part: "chart1" });
+  return `<div class="compact">
+    <h3>Analiza statistică pe scurt</h3>
+    <table class="kpis"><tbody>${rows.map(([k, v, note, tone]) => `<tr><th>${k}</th><td>${v}</td><td><span class="chip ${tone}">${esc(note)}</span></td></tr>`).join("")}</tbody></table>
+    ${chart}
+    <p class="note">IC = interval de încredere 95% (bootstrap). p corectat Holm; * p&lt;.05, ** p&lt;.01, *** p&lt;.001. g = mărimea efectului (Hedges).
+      <a href="#" data-toggle-full>Toate tabelele și graficele</a></p>
+  </div>`;
+}
+
 // Rezumat pe înțelesul oricui: verdict, 3 cifre, ce funcționează / ce încurcă, ce să faci
 function summaryView({ a, s, imp, target }) {
   const P = s.profile ?? {};
@@ -585,7 +624,7 @@ function summaryView({ a, s, imp, target }) {
     <p class="muted small">Pe baza a ${P.n_per_variant ?? "—"} evaluări AI pe variantă${P.leak?.rate ? "" : ""}. Un pre-test rapid, nu un panel cu oameni.</p>`;
 }
 
-function statsView({ a, s, vs, imp, target, ctrl }) {
+function statsView({ a, s, vs, imp, target, ctrl, part }) {
   const P = s.profile, col = brandColors([target, ...Object.keys(s.confusion ?? {}), "nu știu"]);
   const alerts = (s.alerts ?? []).map((x) => `<div class="alert ${x.level}"><b>${x.level === "critic" ? "Critic" : x.level === "atentie" ? "Atenție" : "OK"}</b> ${esc(x.text)}</div>`).join("");
   const chanceTxt = P.chance != null ? `${Math.round(P.chance * 100)}%` : "—";
@@ -624,6 +663,9 @@ function statsView({ a, s, vs, imp, target, ctrl }) {
       }).join("")}
       <div class="axis f"><span></span><div class="ticks"><span>−${ext.toFixed(2)}</span><span>0</span><span>+${ext.toFixed(2)}</span></div><span></span></div></div>`;
   }
+
+  if (part === "chart1") return chart1;
+  if (part === "chart2") return chart2;
 
   // Tabel: rezultate per element (format APA)
   const table = imp.length ? `<div class="viz"><h3>Tabelul 1. Efectul fiecărui element asupra atribuirii</h3>
