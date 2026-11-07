@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071520";
+const APP_VERSION = "202611071405";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -318,6 +318,7 @@ async function invoke(body) {
   if (error) {
     let msg = error.message;
     try { msg = (await error.context.json()).error ?? msg; } catch {}
+    if (/non-2xx/.test(msg)) msg = "Serverul nu a răspuns la timp (limitele gratuite Gemini). Încearcă din nou peste un minut.";
     throw new Error(msg);
   }
   return data;
@@ -357,7 +358,10 @@ async function runAll(variants, onProgress) {
   await Promise.all([0, 1].map(async () => {
     while (next < variants.length) {
       const v = variants[next++];
-      await invoke({ action: "run_variant", variant_id: v.id });
+      // o variantă poate cere mai multe runde (limita de timp a serverului); continuăm până sunt gata toate evaluările
+      let out = await invoke({ action: "run_variant", variant_id: v.id });
+      for (let k = 0; out?.partial && k < 8; k++) out = await invoke({ action: "run_variant", variant_id: v.id, continue: true });
+      if (out?.partial) throw new Error("Panelul răspunde prea încet acum (limitele gratuite Gemini). Încearcă din nou peste câteva minute.");
       onProgress(++done, variants.length, v);
     }
   }));

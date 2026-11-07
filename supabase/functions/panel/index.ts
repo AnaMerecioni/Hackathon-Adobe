@@ -110,7 +110,11 @@ async function gemini(body: Record<string, unknown>, attempt = 0): Promise<strin
     headers: { "x-goog-api-key": key, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if ((res.status === 429 || res.status >= 500) && attempt < 6) {
+  if (res.status === 429) {
+    const t = await res.clone().text();
+    if (/PerDay|per day|daily/i.test(t)) throw new Error("Cota gratuită zilnică Gemini s-a terminat pentru această cheie. Revine automat a doua zi (în jur de ora 10, ora României) sau pune altă cheie GEMINI_API_KEY în Supabase.");
+  }
+  if ((res.status === 429 || res.status >= 500) && attempt < 4) {
     // respectăm retryDelay dacă Google îl trimite, altfel backoff exponențial
     let wait = 2000 * 2 ** attempt;
     try {
@@ -118,7 +122,7 @@ async function gemini(body: Record<string, unknown>, attempt = 0): Promise<strin
       const d = j?.error?.details?.find((x: any) => x.retryDelay)?.retryDelay;
       if (d) wait = Math.max(wait, parseFloat(d) * 1000);
     } catch { /* ignorăm */ }
-    await new Promise((r) => setTimeout(r, Math.min(wait, 30000) + Math.random() * 500));
+    await new Promise((r) => setTimeout(r, Math.min(wait, 20000) + Math.random() * 500));
     return gemini(body, attempt + 1);
   }
   if (!res.ok) throw new Error(`Gemini API ${res.status}: ${(await res.text()).slice(0, 400)}`);
@@ -140,7 +144,10 @@ async function pool<T, R>(items: T[], n: number, fn: (x: T, i: number) => Promis
 }
 
 // ---------- run_variant ----------
-async function runVariant(variantId: string) {
+// Limita unei cereri edge e 150 s; ne oprim să mai pornim evaluări după ~60 s și interfața continuă cu o nouă cerere
+const TIME_BUDGET_MS = 60_000;
+async function runVariant(variantId: string, cont = false) {
+  const started = Date.now();
   imgCache.clear();
   const { data: v, error } = await supabase.from("variants")
     .select("*, analyses!inner(*, ads!inner(*, brands!inner(*)))").eq("id", variantId).single();
@@ -158,7 +165,10 @@ async function runVariant(variantId: string) {
   if (!names.includes(target)) names.push(target);
 
   await supabase.from("variants").update({ status: "running" }).eq("id", variantId);
-  await supabase.from("panel_votes").delete().eq("variant_id", variantId);
+  if (!cont) await supabase.from("panel_votes").delete().eq("variant_id", variantId);
+  const { data: prev } = await supabase.from("panel_votes").select("eval_index").eq("variant_id", variantId);
+  const doneIdx = new Set((prev ?? []).map((x) => x.eval_index));
+  const todo = Array.from({ length: analysis.n_evals }, (_, i) => i).filter((i) => !doneIdx.has(i));
 
   // Memoria însămânțată: 3–5 reclame nemascate, etichetate, per brand — niciodată reclama testată.
   const memory: any[] = [];
@@ -235,7 +245,8 @@ async function runVariant(variantId: string) {
   const testImage = { inline_data: await inlineImage(v.image_path) };
   const candidatesAll = [...names, UNKNOWN];
 
-  const votes = await pool(Array.from({ length: analysis.n_evals }, (_, i) => i), CONCURRENCY, async (i) => {
+  const votes = await pool(todo, CONCURRENCY, async (i) => {
+    if (Date.now() - started > TIME_BUDGET_MS) return null; // continuă în cererea următoare
     const order = shuffle(candidatesAll); // amestecăm ordinea la fiecare evaluare (bias de poziție)
     const parts = [
       ...memory,
@@ -257,18 +268,23 @@ async function runVariant(variantId: string) {
     }
     const total = Object.values(probs).reduce((s, x) => s + x, 0);
     if (total > 0) for (const k in probs) probs[k] /= total; else { probs[UNKNOWN] = 1; valid = false; }
-    return { variant_id: variantId, eval_index: i, candidate_order: order, probabilities: probs, valid,
+    const vote = { variant_id: variantId, eval_index: i, candidate_order: order, probabilities: probs, valid,
       cues: (input.cues ?? []).slice(0, 12), visible_text: (input.text_vizibil ?? []).map(String).slice(0, 8), model: MODEL };
+    const { error: insErr } = await supabase.from("panel_votes").insert(vote); // salvat imediat
+    if (insErr) throw insErr;
+    return vote;
   });
 
-  const { error: insErr } = await supabase.from("panel_votes").insert(votes);
-  if (insErr) throw insErr;
+  const remaining = todo.length - votes.filter(Boolean).length;
+  if (remaining > 0) return { variant_id: variantId, partial: true, done: analysis.n_evals - remaining, total: analysis.n_evals };
+  const { data: all } = await supabase.from("panel_votes").select("probabilities").eq("variant_id", variantId);
+  const allVotes = (all ?? []) as { probabilities: Record<string, number> }[];
 
-  const distribution = Object.fromEntries(candidatesAll.map((c) => [c, mean(votes.map((x) => x.probabilities[c]))]));
-  const att = votes.map((x) => x.probabilities[target]);
+  const distribution = Object.fromEntries(candidatesAll.map((c) => [c, mean(allVotes.map((x) => x.probabilities[c] ?? 0))]));
+  const att = allVotes.map((x) => x.probabilities[target] ?? 0);
   const upd = { status: "done", attribution: mean(att), attribution_sd: sd(att), distribution };
   await supabase.from("variants").update(upd).eq("id", variantId);
-  return { variant_id: variantId, target, ...upd, n: votes.length };
+  return { variant_id: variantId, target, ...upd, n: allVotes.length };
 }
 
 async function computeSimilarity(a: any, base: any, target: string) {
@@ -550,7 +566,7 @@ Deno.serve(async (req) => {
         body.analysis_id, body.brief ?? {}, !!body.images, email!));
     }
     if (body.action === "run_variant" && body.variant_id) {
-      return json(await runVariant(body.variant_id));
+      return json(await runVariant(body.variant_id, !!body.continue));
     }
     if (body.action === "finalize" && body.analysis_id) {
       await supabase.from("analyses").update({ status: "running" }).eq("id", body.analysis_id);
