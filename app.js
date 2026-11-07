@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071113";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071121";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = (s) => document.querySelector(s);
@@ -446,4 +446,21 @@ async function loadHistory() {
     h.addEventListener("click", () => showResult($("#history-detail"), h.dataset.id)));
 }
 
-loadData();
+// ---------- autentificare (doar echipa) ----------
+async function showApp(session) {
+  const on = !!session;
+  $("#login").classList.toggle("hidden", on);
+  $("#app").classList.toggle("hidden", !on);
+  $("#mainnav").classList.toggle("hidden", !on);
+  $("#userbox").classList.toggle("hidden", !on);
+  if (on) { $("#user-email").textContent = session.user.email; loadData(); }
+}
+$("#login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#login-err").textContent = "";
+  const { data, error } = await sb.auth.signInWithPassword({ email: $("#login-email").value.trim(), password: $("#login-pass").value });
+  if (error) return ($("#login-err").textContent = error.message === "Invalid login credentials" ? "Email sau parolă greșite." : error.message);
+  showApp(data.session);
+});
+$("#logout").addEventListener("click", async () => { await sb.auth.signOut(); showApp(null); });
+sb.auth.getSession().then(({ data }) => showApp(data.session));

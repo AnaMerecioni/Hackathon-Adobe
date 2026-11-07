@@ -5,19 +5,31 @@
   <meta http-equiv="Cache-Control" content="no-cache" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Fără logo — laboratorul de amprentă a brandului</title>
-  <link rel="stylesheet" href="styles.css?v=202611071113" />
+  <link rel="stylesheet" href="styles.css?v=202611071121" />
 </head>
 <body>
   <header>
     <div class="brand">Fără&nbsp;logo<span>laboratorul de amprentă a brandului</span></div>
-    <nav>
+    <div id="userbox" class="userbox hidden"><span id="user-email"></span><button id="logout" type="button">Ieșire</button></div>
+    <nav id="mainnav" class="hidden">
       <button data-tab="setup" class="active">1 · Set de date</button>
       <button data-tab="analyze">2 · Analiză</button>
       <button data-tab="history">3 · Rezultate</button>
     </nav>
   </header>
 
-  <main>
+  <section id="login" class="login hidden">
+    <form id="login-form" class="card">
+      <h2>Intră în aplicație</h2>
+      <p class="muted">Accesul e doar pentru echipă.</p>
+      <label>Email <input id="login-email" type="email" autocomplete="username" required /></label>
+      <label>Parolă <input id="login-pass" type="password" autocomplete="current-password" required /></label>
+      <button class="primary">Intră</button>
+      <p id="login-err" class="err"></p>
+    </form>
+  </section>
+
+  <main id="app" class="hidden">
     <!-- 1. Set de date -->
     <section id="tab-setup" class="tab active">
       <div class="grid2">
@@ -99,6 +111,6 @@
 
   <div id="lightbox" class="lightbox hidden"><img alt="" /><div class="lb-cap"></div></div>
   <div id="tip" class="tip hidden"></div>
-  <script type="module" src="app.js?v=202611071113"></script>
+  <script type="module" src="app.js?v=202611071121"></script>
 </body>
 </html>

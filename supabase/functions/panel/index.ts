@@ -352,6 +352,14 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Folosește POST." }, 405);
   let body: any;
   try { body = await req.json(); } catch { return json({ error: "JSON invalid." }, 400); }
+  // Doar membrii echipei (tabela team_members) pot porni analize
+  const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const { data: u } = await supabase.auth.getUser(token);
+  const email = u?.user?.email?.toLowerCase();
+  const { data: member } = email
+    ? await supabase.from("team_members").select("email").eq("email", email).maybeSingle()
+    : { data: null };
+  if (!member) return json({ error: "Acces doar pentru echipă. Autentifică-te în aplicație." }, 401);
   try {
     if (body.action === "diag") {
       // diagnostic fără a expune cheia: lungime, prefix, caractere suspecte
