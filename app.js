@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071127";
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071131";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = (s) => document.querySelector(s);
@@ -163,13 +163,24 @@ function loadImage(src) {
     const i = new Image();
     i.crossOrigin = "anonymous";
     i.onload = () => res(i);
-    i.onerror = () => rej(new Error("Imaginea nu s-a putut încărca."));
-    i.src = src;
+    i.onerror = () => rej(new Error("Imaginea nu s-a putut încărca pentru editare."));
+    // URL separat pentru canvas: Safari altfel refolosește copia din cache fără antet CORS și blochează editorul
+    i.src = src + (src.includes("?") ? "&" : "?") + "cors=1";
   });
 }
 
 async function openEditor(ad) {
-  const img = await loadImage(imgUrl(ad.image_path));
+  if (!ad) return;
+  $("#editor").classList.remove("hidden");
+  $("#progress").textContent = "Se încarcă imaginea…";
+  let img;
+  try { img = await loadImage(imgUrl(ad.image_path)); }
+  catch (e) {
+    $("#progress").innerHTML = `<span class="err">${esc(e.message)} Reîncarcă pagina (Cmd+Shift+R) și încearcă din nou.</span>`;
+    $("#editor").scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  $("#progress").textContent = "";
   current = { ad, img, layers: [{ name: "Logo", logo: true, rects: [] }], active: 0 };
   canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
   $("#editor").classList.remove("hidden");
