@@ -4,7 +4,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js?v=202611071329";
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // GitHub Pages ține pagina în cache ~10 minute: verificăm versiunea publicată și reîncărcăm dacă e mai nouă
-const APP_VERSION = "202611071500";
+const APP_VERSION = "202611071540";
 fetch(`version.txt?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.ok ? r.text() : null).then((v) => {
   v = v?.trim();
   if (v && v !== APP_VERSION && !location.search.includes(`r=${v}`)) location.replace(`${location.pathname}?r=${v}`);
@@ -777,7 +777,8 @@ async function mountRebrand(slot, ctx) {
       <div><b>${need ? `Reclama seamănă prea mult cu ${esc(rival ?? "concurența")}` : "Vrei să faci reclama și mai distinctivă?"}</b>
       <p>${need ? "Răspunde la câteva întrebări despre brand și primești 3 direcții de rebranding, testate apoi automat în panel." : "Poți genera direcții de rebranding pornind de la identitatea brandului."}</p></div>
       <button type="button" class="primary inline-cta" data-rb-open>✨ Pornește rebrandingul</button></div>
-    <div class="rb-panel hidden"></div><div class="rb-result"></div>`;
+    <div class="heat-slot"></div><div class="rb-panel hidden"></div><div class="rb-result"></div>`;
+  mountHeatmap(slot.querySelector(".heat-slot"), ctx);
   const panel = slot.querySelector(".rb-panel");
   slot.querySelector("[data-rb-open]").addEventListener("click", () => {
     panel.classList.toggle("hidden");
@@ -787,6 +788,74 @@ async function mountRebrand(slot, ctx) {
   // ultimul rebranding salvat pentru această analiză
   const { data: prev } = await sb.from("rebrands").select("*").eq("analysis_id", analysisId).order("created_at", { ascending: false }).limit(1);
   if (prev?.[0]?.result) renderRebrand(slot.querySelector(".rb-result"), ctx, { id: prev[0].id, result: prev[0].result, images: prev[0].images ?? [], image_error: prev[0].image_error });
+}
+
+// Heatmap: unde seamănă reclama cu concurenții (zone marcate de Gemini, desenate peste imagine)
+function mountHeatmap(box, ctx) {
+  const baseV = ctx.vs.find((v) => v.kind === "base");
+  if (!baseV) return;
+  const draw = (heat) => {
+    const zs = heat?.zone ?? [];
+    box.innerHTML = `<div class="heat"><div class="heat-head"><h3>🔥 Unde seamănă cu concurența</h3>
+        <button type="button" class="ghost sm" data-heat>${heat ? "Recalculează" : "Arată heatmap-ul"}</button></div>
+      ${heat ? `<div class="heat-body"><div class="heat-img"><img src="${imgUrl(baseV.image_path)}" alt="" crossorigin="anonymous" /><canvas></canvas>
+        ${zs.map((z, i) => `<span class="hz" data-z="${i}" style="top:${z.box[0] / 10}%;left:${z.box[1] / 10}%;height:${(z.box[2] - z.box[0]) / 10}%;width:${(z.box[3] - z.box[1]) / 10}%"></span>`).join("")}</div>
+        <ol class="heat-list">${zs.map((z, i) => `<li data-z="${i}"><span class="hbar" style="--v:${Math.round(z.intensitate * 100)}%"></span>
+          <b>${esc(z.ce)}</b><span class="muted small">ca la ${esc(z.concurent)} · ${Math.round(z.intensitate * 100)}%</span></li>`).join("") || "<li class='muted'>Nu au fost găsite zone asemănătoare.</li>"}</ol></div>
+        <p class="muted small">Roșu = seamănă puternic cu reclamele concurenților din memorie. Zonele sunt marcate de Gemini comparând imaginile; trece cu mouse-ul pe listă.</p>` :
+        `<p class="muted small">Gemini compară reclama ta cu reclamele concurenților și colorează zonele care seamănă.</p>`}
+      <div class="muted small" data-heat-status></div></div>`;
+    box.querySelector("[data-heat]").addEventListener("click", run);
+    if (!heat) return;
+    const img = box.querySelector(".heat-img img"), cv = box.querySelector(".heat-img canvas");
+    const paint = () => {
+      const W = cv.width = img.clientWidth, H = cv.height = img.clientHeight, x = cv.getContext("2d");
+      x.clearRect(0, 0, W, H); x.globalCompositeOperation = "lighter";
+      for (const z of zs) {
+        const cx = ((z.box[1] + z.box[3]) / 2000) * W, cy = ((z.box[0] + z.box[2]) / 2000) * H;
+        const rx = Math.max(20, ((z.box[3] - z.box[1]) / 1000) * W * 0.65), ry = Math.max(20, ((z.box[2] - z.box[0]) / 1000) * H * 0.65);
+        x.save(); x.translate(cx, cy); x.scale(1, ry / rx);
+        const g = x.createRadialGradient(0, 0, 0, 0, 0, rx);
+        g.addColorStop(0, `rgba(255,40,0,${0.25 + 0.5 * z.intensitate})`); g.addColorStop(0.55, `rgba(255,170,0,${0.15 + 0.3 * z.intensitate})`); g.addColorStop(1, "rgba(255,200,0,0)");
+        x.fillStyle = g; x.beginPath(); x.arc(0, 0, rx, 0, 7); x.fill(); x.restore();
+      }
+    };
+    img.complete ? paint() : img.addEventListener("load", paint);
+    window.addEventListener("resize", paint);
+    box.querySelectorAll("[data-z]").forEach((el) => el.addEventListener("mouseenter", () =>
+      box.querySelectorAll(`[data-z="${el.dataset.z}"]`).forEach((m) => m.classList.add("on"))));
+    box.querySelectorAll("[data-z]").forEach((el) => el.addEventListener("mouseleave", () =>
+      box.querySelectorAll(".on").forEach((m) => m.classList.remove("on"))));
+  };
+  const run = async () => {
+    const st = box.querySelector("[data-heat-status]"), b = box.querySelector("[data-heat]");
+    b.disabled = true; st.textContent = "Compar reclama cu concurenții…";
+    try { const h = await invoke({ action: "heatmap", analysis_id: ctx.analysisId }); ctx.s.heatmap = h; draw(h); }
+    catch (err) { st.innerHTML = `<span class="err">${esc(err.message)}</span>`; b.disabled = false; }
+  };
+  draw(ctx.s.heatmap);
+}
+
+// Avatar desenat local (fără poze ale unor oameni reali), diferit după sex, vârstă și nume
+function avatarSvg(p) {
+  let h = 0; for (const c of String(p.nume ?? "")) h = (h * 33 + c.charCodeAt(0)) >>> 0;
+  const pick = (arr) => arr[(h = (h * 1103515245 + 12345) >>> 0) % arr.length];
+  const skin = pick(["#f2c9a5", "#e8b48c", "#d39b72", "#c68863", "#f6d4b8"]);
+  const age = Number(p.varsta) || 40, f = p.sex === "F";
+  const hair = age >= 62 ? pick(["#cfcfcf", "#b9b9b9", "#e3e3e3"]) : pick(["#2b1d14", "#5a3b22", "#8a5a2b", "#c7a26b", "#1c1c1c", "#7a2f1d"]);
+  const shirt = pick(["#2f6fdf", "#e0892b", "#2e9e5b", "#c2366b", "#6b4fd8", "#3a3f4a", "#d84f3c"]);
+  const hairShape = f ? (pick([0, 1, 2]) === 0 ? `<path d="M22 46c0-22 14-32 28-32s28 10 28 32v30H66V44H34v32H22z" fill="${hair}"/>`
+      : `<path d="M20 48c0-24 14-34 30-34s30 10 30 34c0 10-4 20-8 26l-4-30H32l-4 30c-4-6-8-16-8-26z" fill="${hair}"/>`)
+    : age >= 55 && pick([0, 1]) ? `<path d="M28 34c4-10 12-14 22-14s18 4 22 14c-6-4-12-6-22-6s-16 2-22 6z" fill="${hair}"/>`
+    : `<path d="M27 40c0-16 10-24 23-24s23 8 23 24c-5-6-13-9-23-9s-18 3-23 9z" fill="${hair}"/>`;
+  const glasses = age >= 45 && pick([0, 1, 2]) === 0 ? `<g fill="none" stroke="#333" stroke-width="2"><circle cx="41" cy="50" r="6"/><circle cx="59" cy="50" r="6"/><path d="M47 50h6"/></g>` : "";
+  const beard = !f && pick([0, 1, 2, 3]) === 0 ? `<path d="M34 58c2 12 8 16 16 16s14-4 16-16c-4 4-9 6-16 6s-12-2-16-6z" fill="${hair}" opacity=".9"/>` : "";
+  const lines = age >= 55 ? `<path d="M36 44h8M56 44h8" stroke="#00000022" stroke-width="1.5"/>` : "";
+  return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="${shirt}22"/>
+    <path d="M18 100c2-18 16-26 32-26s30 8 32 26z" fill="${shirt}"/><rect x="44" y="62" width="12" height="14" fill="${skin}"/>
+    <ellipse cx="50" cy="48" rx="20" ry="23" fill="${skin}"/>${hairShape}${lines}
+    <circle cx="42" cy="50" r="2.2" fill="#222"/><circle cx="58" cy="50" r="2.2" fill="#222"/>
+    <path d="M44 61q6 4 12 0" stroke="#7a3b2e" stroke-width="2" fill="none" stroke-linecap="round"/>${beard}${glasses}</svg>`;
 }
 
 function renderBriefForm(panel, ctx, { rival, assets }) {
@@ -812,7 +881,7 @@ function renderBriefForm(panel, ctx, { rival, assets }) {
     </div></div>
     <div class="rb-step"><span class="rb-num">3</span><div>
       <h3>Generează</h3>
-      <label class="inline"><input type="checkbox" data-images checked /> editează reclama cu AI (pornind de la imaginea ta)</label>
+      <label class="inline"><input type="checkbox" data-images checked /> rulează automat Face Off (panel de persoane AI)</label>
       <button type="button" class="primary big" data-go>✨ Generează 3 direcții de rebranding</button>
       <div class="muted" data-go-status></div>
     </div></div>`;
@@ -874,7 +943,7 @@ function renderBriefForm(panel, ctx, { rival, assets }) {
     const brief = Object.fromEntries(BRIEF_Q.map(([k]) => [k, val(k).value.trim()]).filter(([, v]) => v));
     const images = panel.querySelector("[data-images]").checked;
     btn.disabled = true; btn.textContent = "Generez direcțiile…";
-    st.textContent = images ? "Întâi strategia (câteva secunde), apoi cele 3 reclame noi apar pe rând." : "Durează câteva secunde.";
+    st.textContent = images ? "Întâi strategia (câteva secunde), apoi panelul Face Off votează direcțiile." : "Durează câteva secunde.";
     try {
       const out = await invoke({ action: "rebrand", analysis_id: ctx.analysisId, brief, images });
       const box = panel.parentElement.querySelector(".rb-result");
@@ -1067,7 +1136,6 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
   const baseV = ctx.vs.find((v) => v.kind === "base");
   const baseUrl = baseV ? imgUrl(baseV.image_path) : "";
   const RISK = { sigur: "good", echilibrat: "warn", curajos: "bad" };
-  const previews = [];
   box.innerHTML = `<div class="rb-out">
     <h3>Rebranding propus${r.concurent ? ` · departe de ${esc(r.concurent)}` : ""}</h3>
     <p class="sum-text">${esc(r.diagnostic)}</p>
@@ -1082,9 +1150,7 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
       <div><h4>Mascota propusă: ${esc(r.mascota.nume)}</h4><p class="muted small">${esc(r.mascota.descriere)}</p></div></div>` : ""}
     ${r.a_functionat?.length ? `<div class="chips-row"><span class="muted small">A funcționat în alte reclame ale brandului:</span>${r.a_functionat.map((w) => `<span class="chip good">${esc(w.element)} +${Math.round(w.delta * 100)} pp</span>`).join("")}</div>` : ""}
     <div class="dirs">${(r.directii ?? []).map((d, i) => `<div class="dir">
-      ${images[i] ? `<div class="ba" style="--x:50%"><img src="${baseUrl}" alt="" /><img class="after" src="${imgUrl(images[i])}" alt="" />
-        <input type="range" min="0" max="100" value="50" aria-label="Înainte / după" /><span class="ba-l">înainte</span><span class="ba-r">${esc(d.sursa_imagine ?? "după")}</span></div>`
-        : `<div class="dir-ph" data-ph="${i}">${d.culori?.length >= 2 ? "Pregătesc previzualizarea…" : "Fără imagine"}</div>`}
+      ${conceptCard(d, r, i)}
       ${(d.culori ?? []).length ? `<div class="mini-pal">${d.culori.map((h) => `<span style="background:${esc(h)}" title="${esc(h)}"></span>`).join("")}</div>` : ""}
       <div class="dir-body"><div class="dir-head"><b>${esc(d.titlu)}</b><span class="chip ${RISK[d.risc] ?? ""}">${esc(d.risc)}</span></div>
         <p>${esc(d.descriere)}</p>
@@ -1095,36 +1161,108 @@ function renderRebrand(box, ctx, { id: rbId, result: r, images = [], image_error
         ${d.imprumutat?.length ? `<div class="ks"><div><b>Reutilizat</b>${d.imprumutat.map((x) => `<span class="chip">${esc(x)}</span>`).join("")}</div></div>` : ""}
         <p class="muted small"><b>De ce e distinct:</b> ${esc(d.de_ce_distinct)}</p>
         ${d.legatura_cu_identitatea ? `<p class="muted small"><b>Identitate:</b> ${esc(d.legatura_cu_identitatea)}</p>` : ""}
-        <details><summary>Prompt pentru imagine</summary><p class="small">${esc(d.prompt_imagine)}</p>
-          <button type="button" class="ghost sm" data-copy="${esc(d.prompt_imagine)}">Copiază promptul</button></details>
+        <details><summary>Brief pentru designer</summary><p class="small">${esc(d.prompt_imagine)}</p>
+          <button type="button" class="ghost sm" data-copy="${esc(d.prompt_imagine)}">Copiază brief-ul</button></details>
       </div></div>`).join("")}</div>
-    <div class="gen-row"><button type="button" class="ghost${(r.directii ?? []).every((_, i) => images[i]) ? " hidden" : ""}" data-gen>🎨 Editează reclama cu AI</button>
-      <span class="muted small" data-gen-status>${(r.directii ?? []).every((_, i) => images[i]) ? "" : "Vezi layout-ul nou montat din reclama ta."}</span></div>
-    <div class="ab"><button type="button" class="primary big" data-ab>▶ Testează direcțiile în panel (A/B)</button>
-      <div class="muted small">Originalul și fiecare direcție trec prin același panel orb; câștigă varianta recunoscută cel mai bine.</div>
-      <div class="muted" data-ab-status></div><div data-ab-out></div></div>
+    <div class="fo"><div class="fo-head"><h3>🎭 Face Off: publicul tău alege</h3>
+      <p class="muted small">12 persoane extrase pe cotele populației României (vârstă, sex, mediu, regiune), fiecare cu un tipar de cumpărare preluat din ce spun
+        cumpărători reali pe internet. Fiecare vede reclama actuală și cele 3 direcții, alege și spune ce ar schimba. Inspirat de Project Face Off, câștigător Adobe Summit Sneaks 2026.</p></div>
+      <button type="button" class="primary big" data-fo>▶ Pornește Face Off (12 persoane)</button>
+      <div class="muted" data-fo-status></div><div data-fo-out>${r.face_off ? faceOffView(r.face_off, r) : ""}</div></div>
     ${r.urmatorul_pas ? `<div class="todo"><h3>Următorul pas</h3><p>${esc(r.urmatorul_pas)}</p></div>` : ""}
   </div>`;
   box.querySelectorAll(".ba input").forEach((inp) => inp.addEventListener("input", () => inp.parentElement.style.setProperty("--x", `${inp.value}%`)));
   box.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(b.dataset.copy); const t = b.innerHTML; b.classList.add("copied"); setTimeout(() => b.classList.remove("copied"), 900); } catch {}
   }));
-  // previzualizări cu paleta pentru direcțiile fără imagine AI
-  (r.directii ?? []).forEach(async (d, i) => {
-    if (images[i] || !(d.culori?.length >= 2) || !baseUrl) return;
-    const ph = box.querySelector(`[data-ph="${i}"]`);
-    try {
-      const blob = await composeAd(baseUrl, d, r);
-      if (!blob) { if (ph) ph.textContent = "Fără imagine"; return; }
-      previews[i] = blob;
-      if (images[i]) return;
-      setBA(box, i, baseUrl, URL.createObjectURL(blob), "layout nou din reclama ta");
-    } catch { if (ph && !images[i]) ph.textContent = "Previzualizarea nu a putut fi generată"; }
-  });
-  const ab = box.querySelector("[data-ab]");
-  ab.addEventListener("click", () => runAB(box, ctx, r, images, ab, previews, rbId));
-  box.querySelector("[data-gen]").addEventListener("click", () => genImages(box, rbId, r, images, baseUrl));
-  if (autoImages && baseUrl) genImages(box, rbId, r, images, baseUrl);
+  const fo = box.querySelector("[data-fo]");
+  if (r.face_off) fo.textContent = "▶ Rulează din nou Face Off";
+  fo.addEventListener("click", () => runFaceOff(box, r, rbId, fo));
+  if (autoImages && !r.face_off) fo.click();
+}
+
+// Face Off live: eșantion pe cote + tipare reale, apoi fiecare persoană răspunde pe rând
+async function runFaceOff(box, r, rbId, btn) {
+  const st = box.querySelector("[data-fo-status]"), out = box.querySelector("[data-fo-out]");
+  const names = ["Reclama actuală", ...(r.directii ?? []).map((d) => d.titlu)];
+  btn.disabled = true; btn.textContent = "Panelul e în desfășurare…";
+  try {
+    st.textContent = "Caut pe internet ce spun cumpărătorii reali și construiesc eșantionul pe cotele populației…";
+    const setup = await invoke({ action: "face_off_setup", rebrand_id: rbId, n: 12 });
+    out.innerHTML = `<div class="fo-live">
+      <div class="fo-sample"><b>Eșantion: ${setup.personas.length} persoane</b> · ${esc(setup.metoda)}
+        <div class="seg-row">${(setup.segmente ?? []).map((g) => `<span class="chip">${esc(g.nume)} · ${Math.round((g.pondere ?? 0) * 100)}%</span>`).join("")}</div>
+        ${setup.surse?.length ? `<div class="small muted">Comportamente preluate din: ${setup.surse.slice(0, 5).map((u) => `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.titlu || "sursă")}</a>`).join(" · ")}</div>` : ""}</div>
+      <div class="live-feed">${setup.personas.map((p, i) => `<div class="live-p waiting" data-p="${i}">
+        <div class="lp-av">${avatarSvg(p)}</div>
+        <div class="lp-body"><div><b>${esc(p.nume)}, ${esc(p.varsta)}</b> <span class="muted small">${esc(p.ocupatie ?? "")} · ${esc(p.localitate ?? "")}, ${esc(p.mediu)}</span></div>
+          <div class="muted small">${esc(p.tipar)}</div><div class="lp-say"><span class="typing"><i></i><i></i><i></i></span></div></div></div>`).join("")}</div>
+      <div data-fo-agg></div></div>`;
+    const answers = []; let done = 0, next = 0;
+    st.textContent = `Panelul răspunde: 0 / ${setup.personas.length}`;
+    const one = async (i) => {
+      const card = out.querySelector(`[data-p="${i}"]`); card.classList.remove("waiting"); card.classList.add("talking");
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      let a = null;
+      for (let t = 0; t < 2 && !a; t++) { try { a = await invoke({ action: "face_off_eval", rebrand_id: rbId, index: i }); } catch { /* reîncerc o dată */ } }
+      card.classList.remove("talking");
+      if (!a) { card.querySelector(".lp-say").innerHTML = `<span class="muted small">nu a răspuns</span>`; return; }
+      answers.push(a);
+      const say = card.querySelector(".lp-say"); say.innerHTML = "";
+      const q = document.createElement("p"); q.className = "p-quote"; say.appendChild(q);
+      const text = `„${a.citat}”`;
+      for (let k = 0; k <= text.length; k += 3) { q.textContent = text.slice(0, k); await new Promise((res) => setTimeout(res, 12)); }
+      q.textContent = text;
+      say.insertAdjacentHTML("beforeend", `<div class="lp-tags"><span class="chip good">alege: ${esc(names[a.favorit] ?? "—")}</span>
+        ${a.ce_schimbi ? `<span class="chip warn">ar schimba: ${esc(a.ce_schimbi)}</span>` : ""}</div>`);
+      st.textContent = `Panelul răspunde: ${++done} / ${setup.personas.length}`;
+    };
+    await Promise.all([0, 1, 2].map(async () => { while (next < setup.personas.length) await one(next++); }));
+    st.textContent = "Calculez rezultatul ponderat…";
+    const res = await invoke({ action: "face_off_save", rebrand_id: rbId, answers });
+    r.face_off = res;
+    out.querySelector("[data-fo-agg]").innerHTML = faceOffView(res, r);
+    st.textContent = "";
+  } catch (err) { st.innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+  finally { btn.disabled = false; btn.textContent = "▶ Rulează din nou Face Off"; }
+}
+
+// Conceptul direcției, ca machetă tipografică: paleta, headline-ul și mascota (fără imagine generată)
+function conceptCard(d, r, i) {
+  const pal = (d.culori ?? []).map(hexRgb).filter(Boolean).sort((p, q) => lum(p) - lum(q));
+  if (pal.length < 2) return "";
+  const css = (p) => `rgb(${p.join(",")})`, light = lum(pal[pal.length - 1]) > 170 ? pal[pal.length - 1] : [255, 255, 255];
+  const bg = d.risc === "curajos" ? `conic-gradient(from 200deg at 70% 80%, ${pal.map(css).join(",")}, ${css(pal[0])})`
+    : `linear-gradient(160deg, ${pal.map(css).join(",")})`;
+  const m = r.mascota?.svg ? mascotSvg(r.mascota.svg, pal) : "";
+  return `<div class="concept ${esc(d.risc)}" style="background:${bg};color:${css(light)}">
+    <span class="c-tag">concept ${i + 1}</span><b class="c-head">${esc(d.text_nou ?? "")}</b>
+    <span class="c-line" style="background:${css(pal[Math.min(pal.length - 1, 1)])}"></span>${m ? `<div class="c-masc">${m}</div>` : ""}</div>`;
+}
+
+// Rezultatul Face Off: cotă de preferință ponderată (IC 95%), scoruri pe criterii, ce ar schimba oamenii
+function faceOffView(fo, r) {
+  const dirs = r.directii ?? [], names = ["Reclama actuală", ...dirs.map((d) => d.titlu)];
+  const rows = fo.scores ?? [], n = fo.n ?? fo.personas?.length ?? 0;
+  const share = (x) => x.share ?? (n ? x.votes / n : 0);
+  const best = rows.reduce((a, x) => (share(x) > share(a ?? x) ? x : a ?? x), null);
+  const crit = [["atentie", "Atrage atenția"], ["distinctiv", "Distinctiv"], ["potrivire", "Se potrivește brandului"], ["cumparare", "Aș cumpăra"]];
+  const color = (k) => (k === 0 ? "#9aa0a6" : ["#2f6fdf", "#e0892b", "#c2366b"][(k - 1) % 3]);
+  const sure = best?.ci && rows.every((x) => x === best || !x.ci || x.ci[1] < best.ci[0]);
+  const pc = (v) => `${Math.round(v * 100)}%`;
+  return `<div class="fo-res">
+    <div class="verdict ${best && best.index > 0 ? (sure ? "good" : "warn") : "bad"}">${best ? (best.index > 0
+      ? `Preferată: „${esc(names[best.index])}” · ${pc(share(best))} din public${best.ci ? ` (IC 95% ${pc(best.ci[0])}–${pc(best.ci[1])})` : ""}${sure ? "" : " · diferență încă nesigură"}`
+      : `Reclama actuală rămâne preferată (${pc(share(best))}). Direcțiile au nevoie de mai multă forță.`) : "—"}</div>
+    <div class="fo-grid">${rows.map((x) => `<div class="fo-col${x === best ? " best" : ""}">
+      <div class="fo-name"><span class="dot" style="background:${color(x.index)}"></span>${esc(names[x.index])}</div>
+      <div class="fo-votes">${pc(share(x))} preferință${x.ci ? ` · IC ${pc(x.ci[0])}–${pc(x.ci[1])}` : ""} · ${x.votes} ${x.votes === 1 ? "vot" : "voturi"}</div>
+      ${crit.map(([k, l]) => `<div class="fo-bar"><span>${l}</span><i><b style="width:${(x[k] ?? 0) * 10}%;background:${color(x.index)}"></b></i><em>${(x[k] ?? 0).toFixed(1)}</em></div>`).join("")}
+    </div>`).join("")}</div>
+    ${fo.insight ? `<div class="todo"><h3>Ce să faci</h3><p>${esc(fo.insight)}</p></div>` : ""}
+    <p class="muted small">Eșantion sintetic de ${n} persoane: ${esc(fo.metoda ?? "persoane AI")}. Cotele de preferință sunt ponderate după vârstă × mediu (post-stratificare); IC = bootstrap.
+      E o simulare calibrată pe date publice, nu un sondaj cu oameni reali: folosește-o ca să alegi ce testezi pe teren.</p>
+  </div>`;
 }
 
 // A/B: originalul vs. fiecare direcție generată, același panel orb, aceeași statistică

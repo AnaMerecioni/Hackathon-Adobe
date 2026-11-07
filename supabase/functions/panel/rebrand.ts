@@ -2,6 +2,8 @@
 // utilizatorului, și propune 3 direcții vizuale care îndepărtează reclama de concurentul cel mai apropiat.
 // Opțional generează câte o imagine pe direcție (Pollinations: editare cu cheie, FLUX gratuit fără cheie), ca să poată fi retestată în panel.
 
+import * as S from "./stats.ts";
+
 type Deps = {
   supabase: any;
   gemini: (body: Record<string, unknown>) => Promise<string>;
@@ -263,4 +265,213 @@ export async function rebrandImage(d: Deps, rebrandId: string, i: number) {
     if (e?.retryAfter) return { retry_after: e.retryAfter };
     throw e;
   }
+}
+
+// ---------- Face Off: eșantion sintetic calibrat pe date reale (silicon sampling) ----------
+// Metodă: (1) cote după structura populației adulte din România (recensământul 2021, aproximativ),
+// (2) fiecare persoană primește un tipar de comportament extras din opinii reale găsite pe web (cu surse),
+// (3) evaluări independente, (4) post-stratificare pe vârstă × mediu și interval de încredere bootstrap.
+const QUOTE = {
+  varsta: [["18–34", 0.25, [18, 34]], ["35–49", 0.28, [35, 49]], ["50–64", 0.24, [50, 64]], ["65+", 0.23, [65, 80]]] as const,
+  mediu: [["urban", 0.52], ["rural", 0.48]] as const,
+  sex: [["F", 0.52], ["M", 0.48]] as const,
+  regiune: [["București-Ilfov", 0.12], ["Nord-Est", 0.16], ["Sud-Muntenia", 0.15], ["Nord-Vest", 0.13], ["Centru", 0.12],
+    ["Sud-Est", 0.12], ["Sud-Vest Oltenia", 0.10], ["Vest", 0.10]] as const,
+};
+// Extragere pe cote: pentru n mic, metoda celor mai mari resturi pe fiecare dimensiune, apoi amestec determinist
+function quotaDraw<T>(items: readonly (readonly [T, number, ...unknown[]])[], n: number, r: () => number): T[] {
+  const raw = items.map(([k, p]) => ({ k, x: p * n }));
+  const base = raw.map((o) => ({ k: o.k, c: Math.floor(o.x), f: o.x - Math.floor(o.x) }));
+  let left = n - base.reduce((a, o) => a + o.c, 0);
+  [...base].sort((a, b) => b.f - a.f).slice(0, left).forEach((o) => o.c++);
+  const out: T[] = base.flatMap((o) => Array(o.c).fill(o.k));
+  for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [out[i], out[j]] = [out[j], out[i]]; }
+  return out;
+}
+
+export async function faceOffSetup(d: Deps & { geminiRaw: (b: Record<string, unknown>) => Promise<any> }, rebrandId: string, n = 12) {
+  const { data: rb } = await d.supabase.from("rebrands").select("*").eq("id", rebrandId).single();
+  if (!rb) throw new Error("Rebrandingul nu există.");
+  const { data: a } = await d.supabase.from("analyses").select("category, ads!inner(brands!inner(name))").eq("id", rb.analysis_id).single();
+  const cat = a?.category ?? "", brand = a?.ads?.brands?.name ?? "brand", rival = rb.result?.concurent ?? "";
+  n = Math.max(6, Math.min(16, n));
+
+  // 1. Ce spun oamenii reali: recenzii, forumuri, comentarii, articole (Google Search)
+  const j = await d.geminiRaw({
+    systemInstruction: { parts: [{ text: [
+      "Ești cercetător de piață. Cauți pe internet ce spun cumpărători REALI din România despre brandul indicat, concurenții lui și categoria:",
+      "recenzii de produs, forumuri, comentarii, articole cu vox-pop, studii de consum publicate.",
+      "Grupezi ce găsești în 3–5 tipare de comportament (segmente). Pentru fiecare: ce îi face să cumpere, ce îi deranjează, cum aleg brandul,",
+      "și 1–2 opinii tipice reformulate scurt (nu inventa, reformulează doar ce ai găsit).",
+      "Răspunzi DOAR cu JSON: {\"segmente\":[{\"nume\":\"\",\"pondere\":0.3,\"comportament\":\"\",\"ce_conteaza\":\"\",\"ce_deranjeaza\":\"\",\"opinii\":[\"\"]}]}.",
+      "„pondere” = cât de frecvent apare tiparul în ce ai găsit (suma 1).",
+    ].join("\n") }] },
+    contents: [{ role: "user", parts: [{ text: `Brand: ${brand}. Categoria: ${cat}. Concurent apropiat: ${rival || "—"}. Țara: România.` }] }],
+    tools: [{ google_search: {} }],
+    generationConfig: { maxOutputTokens: 2500, temperature: 0.2 },
+  });
+  const cand = j?.candidates?.[0];
+  const txt = (cand?.content?.parts ?? []).filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join("");
+  let segs: any[] = [];
+  try { segs = (JSON.parse(txt.match(/\{[\s\S]*\}/)?.[0] ?? "{}").segmente ?? []).slice(0, 5); } catch { /* fără segmente */ }
+  if (!segs.length) segs = [{ nume: "cumpărător obișnuit", pondere: 1, comportament: "cumpără din obișnuință, atent la preț", ce_conteaza: "preț, disponibilitate", ce_deranjeaza: "reclame care nu spun nimic", opinii: [] }];
+  const surse = (cand?.groundingMetadata?.groundingChunks ?? []).map((c: any) => c.web).filter((w: any) => w?.uri)
+    .map((w: any) => ({ url: w.uri, titlu: clip(w.title, 80) })).slice(0, 8);
+  const tot = segs.reduce((s2, x) => s2 + (Number(x.pondere) || 0), 0) || 1;
+
+  // 2. Eșantion pe cote (determinist pe rebranding) + segment după frecvența reală
+  let seed = 0; for (const ch of rebrandId) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+  const r = S.rng(seed);
+  const ages = quotaDraw(QUOTE.varsta, n, r), envs = quotaDraw(QUOTE.mediu, n, r), sexes = quotaDraw(QUOTE.sex, n, r), regs = quotaDraw(QUOTE.regiune, n, r);
+  const segIdx = quotaDraw(segs.map((x, i) => [i, (Number(x.pondere) || 0) / tot] as const), n, r);
+  const ageRange = Object.fromEntries(QUOTE.varsta.map(([k, , rg]) => [k, rg]));
+  const frame = Array.from({ length: n }, (_, i) => {
+    const [lo, hi] = ageRange[ages[i]] as readonly [number, number];
+    return { grupa: ages[i], varsta: lo + Math.floor(r() * (hi - lo + 1)), mediu: envs[i], sex: sexes[i], regiune: regs[i], segment: segIdx[i] ?? 0 };
+  });
+
+  // 3. Povestea fiecărei persoane, consistentă cu profilul demografic și cu tiparul real
+  const pSchema = { type: "object", properties: { persoane: { type: "array", items: { type: "object", properties: {
+    nume: { type: "string" }, localitate: { type: "string" }, ocupatie: { type: "string" },
+    poveste: { type: "string", description: "2 propoziții: viața de zi cu zi și cum cumpără din categorie, fidel tiparului primit." } },
+    required: ["nume", "localitate", "ocupatie", "poveste"] } } }, required: ["persoane"] };
+  const pTxt = await d.gemini({
+    systemInstruction: { parts: [{ text: "Pentru fiecare profil primit scrii o persoană plauzibilă din România: nume românesc potrivit sexului, " +
+      "o localitate reală din regiunea și mediul indicate, o ocupație potrivită vârstei, și o poveste scurtă care respectă tiparul de comportament. " +
+      "Păstrezi ordinea profilurilor. Fără stereotipuri jignitoare." }] },
+    contents: [{ role: "user", parts: [{ text: JSON.stringify({ categorie: cat, profiluri: frame.map((f) => ({ ...f, tipar: segs[f.segment] })) }) }] }],
+    generationConfig: { responseMimeType: "application/json", responseJsonSchema: pSchema, maxOutputTokens: 4000, temperature: 0.9 },
+  });
+  let people: any[] = [];
+  try { people = JSON.parse(pTxt.replace(/^```(json)?|```$/g, "")).persoane ?? []; } catch { /* gol */ }
+  const personas = frame.map((f, i) => ({ ...f, ...(people[i] ?? {}), nume: people[i]?.nume ?? `Persoana ${i + 1}`,
+    tipar: segs[f.segment]?.nume ?? "" }));
+  const setup = { personas, segmente: segs, surse, n, metoda: "cote recensământ 2021 (vârstă, sex, mediu, regiune) + tipare din opinii reale + post-stratificare" };
+  const result = { ...(rb.result ?? {}), face_off_setup: setup };
+  await d.supabase.from("rebrands").update({ result }).eq("id", rebrandId);
+  return setup;
+}
+
+/** O persoană din eșantion evaluează reclama actuală și cele 3 concepte (cerere separată = evaluare independentă). */
+export async function faceOffEval(d: Deps, rebrandId: string, i: number) {
+  const { data: rb } = await d.supabase.from("rebrands").select("*").eq("id", rebrandId).single();
+  const setup = rb?.result?.face_off_setup, p = setup?.personas?.[i];
+  if (!p) throw new Error("Persoana nu există; pornește din nou Face Off.");
+  const { data: a } = await d.supabase.from("analyses").select("category").eq("id", rb.analysis_id).single();
+  const { data: base } = await d.supabase.from("variants").select("image_path").eq("analysis_id", rb.analysis_id).eq("kind", "base").single();
+  const dirs = (rb.result?.directii ?? []).slice(0, 3), seg = setup.segmente?.[p.segment] ?? {};
+  const options = ["Reclama actuală (imaginea atașată; logo-ul e acoperit cu gri).",
+    ...dirs.map((x: any, k: number) => `Concept ${k + 1} „${x.titlu}”: headline „${x.text_nou}”. ${x.descriere} Culori: ${(x.culori ?? []).join(", ")}.` +
+      (rb.result?.mascota?.nume ? ` Apare mascota „${rb.result.mascota.nume}”.` : ""))];
+  const schema = { type: "object", properties: {
+    scoruri: { type: "array", items: { type: "object", properties: {
+      index: { type: "integer" }, atentie: { type: "integer" }, distinctiv: { type: "integer" }, potrivire: { type: "integer" }, cumparare: { type: "integer" } },
+      required: ["index", "atentie", "distinctiv", "potrivire", "cumparare"] } },
+    favorit: { type: "integer" },
+    citat: { type: "string", description: "Ce spui cu voce tare când vezi reclamele, la persoana I, natural, 1–2 propoziții, cu vocabularul tău." },
+    ce_schimbi: { type: "string", description: "Un singur lucru concret pe care l-ai schimba la varianta preferată." } },
+    required: ["scoruri", "favorit", "citat", "ce_schimbi"] };
+  const parts: any[] = [];
+  if (base) parts.push({ inline_data: await d.inlineImage(base.image_path) });
+  parts.push({ text: options.map((o, k) => `${k}. ${o}`).join("\n") });
+  const t = await d.gemini({
+    systemInstruction: { parts: [{ text: [
+      `Ești ${p.nume}, ${p.varsta} de ani (${p.sex === "F" ? "femeie" : "bărbat"}), ${p.ocupatie}, din ${p.localitate} (${p.mediu}, ${p.regiune}). ${p.poveste ?? ""}`,
+      `Cum cumperi ${a?.category ?? "din categorie"} (tipar observat la cumpărători reali): ${seg.comportament ?? ""}. Ce contează: ${seg.ce_conteaza ?? ""}. Ce te deranjează: ${seg.ce_deranjeaza ?? ""}.`,
+      seg.opinii?.length ? `Oameni ca tine spun lucruri ca: ${seg.opinii.map((o: string) => `„${o}”`).join(" ")}` : "",
+      "Reacționezi ca tine, nu ca un expert. Note 1–10: atenție (te-ar opri?), distinctiv (îl deosebești de alte branduri?), potrivire (pare de încredere?), cumpărare.",
+      "Fii sincer: dacă nu-ți pasă de reclame, se vede în note. Nu da aceeași notă peste tot. Alegi o singură variantă preferată.",
+    ].filter(Boolean).join("\n") }] },
+    contents: [{ role: "user", parts }],
+    generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 700, temperature: 1 },
+  });
+  let out: any;
+  try { out = JSON.parse(t.replace(/^```(json)?|```$/g, "")); } catch { throw new Error("Răspuns invalid; reîncerc."); }
+  const fav = Number.isInteger(out.favorit) && out.favorit >= 0 && out.favorit <= dirs.length ? out.favorit : 0;
+  const cl = (x: any) => Math.max(1, Math.min(10, Number(x) || 5));
+  return { i, favorit: fav, citat: clip(out.citat, 300), ce_schimbi: clip(out.ce_schimbi, 200),
+    scoruri: (out.scoruri ?? []).map((x: any) => ({ index: x.index, atentie: cl(x.atentie), distinctiv: cl(x.distinctiv), potrivire: cl(x.potrivire), cumparare: cl(x.cumparare) })) };
+}
+
+/** Agregare cu post-stratificare (vârstă × mediu) și IC 95% bootstrap pentru cota de preferință. */
+export async function faceOffSave(d: Deps, rebrandId: string, answers: any[]) {
+  const { data: rb } = await d.supabase.from("rebrands").select("*").eq("id", rebrandId).single();
+  const setup = rb?.result?.face_off_setup;
+  if (!setup) throw new Error("Lipsește eșantionul.");
+  const dirs = (rb.result?.directii ?? []).slice(0, 3), K = ["atentie", "distinctiv", "potrivire", "cumparare"];
+  const ok = (answers ?? []).filter((x) => x && setup.personas[x.i]);
+  if (!ok.length) throw new Error("Niciun răspuns de agregat.");
+  // ponderi: cota populației pe celulă / cota în eșantion
+  const pop: Record<string, number> = {};
+  for (const [g, pg] of QUOTE.varsta) for (const [m, pm] of QUOTE.mediu) pop[`${g}|${m}`] = pg * pm;
+  const cell = (x: any) => `${setup.personas[x.i].grupa}|${setup.personas[x.i].mediu}`;
+  const cnt: Record<string, number> = {}; ok.forEach((x) => (cnt[cell(x)] = (cnt[cell(x)] ?? 0) + 1));
+  const w = ok.map((x) => (pop[cell(x)] ?? 0.01) / (cnt[cell(x)] / ok.length));
+  const wsum = w.reduce((a, b) => a + b, 0);
+  const r = S.rng(4242);
+  const opts = [0, ...dirs.map((_: any, k: number) => k + 1)];
+  const scores = opts.map((o) => {
+    const share = ok.reduce((a, x, k) => a + (x.favorit === o ? w[k] : 0), 0) / wsum;
+    const boots: number[] = [];
+    for (let b = 0; b < 2000; b++) { let num = 0, den = 0;
+      for (let k = 0; k < ok.length; k++) { const j = Math.floor(r() * ok.length); den += w[j]; if (ok[j].favorit === o) num += w[j]; }
+      boots.push(num / den); }
+    boots.sort((x, y) => x - y);
+    const row: any = { index: o, votes: ok.filter((x) => x.favorit === o).length, share, ci: [boots[50], boots[1949]] };
+    for (const k of K) { const xs = ok.map((x, j) => [x.scoruri.find((s2: any) => s2.index === o)?.[k], w[j]]).filter(([v]) => v != null) as [number, number][];
+      row[k] = xs.length ? xs.reduce((a, [v, ww]) => a + v * ww, 0) / xs.reduce((a, [, ww]) => a + ww, 0) : 0; }
+    row.total = K.reduce((a, k) => a + row[k], 0) / K.length;
+    return row;
+  });
+  const out: any = { n: ok.length, scores, answers: ok, metoda: setup.metoda, created_at: new Date().toISOString() };
+  try {
+    out.insight = clip(await d.gemini({
+      systemInstruction: { parts: [{ text: "Ești strateg de brand. Din rezultatele panelului (ponderate) scrii 2–3 propoziții în română, fără markdown: " +
+        "ce variantă merită dusă mai departe, cât de sigur e rezultatul (uită-te la intervalele de încredere) și cele mai frecvente lucruri de schimbat." }] },
+      contents: [{ role: "user", parts: [{ text: JSON.stringify({ optiuni: ["Reclama actuală", ...dirs.map((x: any) => x.titlu)], scores, de_schimbat: ok.map((x) => x.ce_schimbi) }) }] }],
+      generationConfig: { maxOutputTokens: 400 },
+    }), 700);
+  } catch { /* opțional */ }
+  const result = { ...(rb.result ?? {}), face_off: out };
+  await d.supabase.from("rebrands").update({ result }).eq("id", rebrandId);
+  return out;
+}
+
+/** Heatmap: zonele din reclamă care seamănă cu reclamele concurenților (Gemini vision, coordonate 0–1000). */
+export async function similarityHeatmap(d: Deps, analysisId: string) {
+  const { data: a } = await d.supabase.from("analyses").select("*, ads!inner(*, brands!inner(*))").eq("id", analysisId).single();
+  if (!a?.summary) throw new Error("Analiza nu are încă rezultate.");
+  const s = a.summary, target = a.ads.brands.name as string;
+  const { data: base } = await d.supabase.from("variants").select("image_path").eq("analysis_id", analysisId).eq("kind", "base").single();
+  const rivals = Object.entries(s.similarity?.per_brand ?? s.confusion ?? {}).filter(([b]) => b !== target)
+    .sort((x: any, y: any) => (y[1]?.mean ?? y[1]) - (x[1]?.mean ?? x[1])).map(([b]) => b).slice(0, 2);
+  const parts: any[] = [{ text: "Reclama analizată (logo acoperit cu gri):" }, { inline_data: await d.inlineImage(base.image_path) }];
+  for (const b of rivals) {
+    const { data: ex } = await d.supabase.from("ads").select("image_path,brands!inner(name,category)")
+      .eq("role", "memory").eq("brands.name", b).eq("brands.category", a.category).limit(2);
+    if (ex?.length) parts.push({ text: `Reclame ${b}:` });
+    for (const e of ex ?? []) parts.push({ inline_data: await d.inlineImage(e.image_path) });
+  }
+  const schema = { type: "object", properties: { zone: { type: "array", items: { type: "object", properties: {
+    box: { type: "array", items: { type: "integer" }, description: "[ymin, xmin, ymax, xmax] 0–1000 în reclama analizată" },
+    intensitate: { type: "number", description: "0–1: cât de puternic seamănă zona cu concurentul" },
+    concurent: { type: "string" }, ce: { type: "string", description: "Ce anume seamănă, concret (culoare, element, compoziție, tipografie)." } },
+    required: ["box", "intensitate", "concurent", "ce"] } } }, required: ["zone"] };
+  const t = await d.gemini({
+    systemInstruction: { parts: [{ text: [
+      `Compari reclama analizată (brandul „${target}”, categoria „${a.category}”) cu reclamele concurenților.`,
+      "Marchezi 3–8 zone din reclama analizată care seamănă vizual cu reclamele concurenților: aceeași culoare dominantă, același tip de element, aceeași compoziție, tipografie sau stil foto.",
+      `Nu marchezi elementele comune întregii categorii (${(s.generic_elements ?? []).join(", ") || "produsul în sine"}) decât dacă sunt tratate identic. Nu marchezi zonele gri.`,
+      "Coordonatele sunt pe reclama analizată, scara 0–1000.",
+    ].join("\n") }] },
+    contents: [{ role: "user", parts }],
+    generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, maxOutputTokens: 1500 },
+  });
+  let zone: any[] = [];
+  try { zone = (JSON.parse(t.replace(/^```(json)?|```$/g, "")).zone ?? []).filter((z: any) => z.box?.length === 4).slice(0, 8)
+    .map((z: any) => ({ box: z.box.map((v: number) => Math.max(0, Math.min(1000, Math.round(v)))), intensitate: Math.max(0, Math.min(1, Number(z.intensitate) || 0.5)),
+      concurent: clip(z.concurent, 40), ce: clip(z.ce, 160) })); } catch { /* gol */ }
+  const heat = { zone, rivals, created_at: new Date().toISOString() };
+  await d.supabase.from("analyses").update({ summary: { ...s, heatmap: heat } }).eq("id", analysisId);
+  return heat;
 }

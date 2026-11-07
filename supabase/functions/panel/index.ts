@@ -6,7 +6,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import * as S from "./stats.ts";
-import { rebrand, briefFromText, briefFromWeb, rebrandImage } from "./rebrand.ts";
+import { rebrand, briefFromText, briefFromWeb, rebrandImage, faceOffSetup, faceOffEval, faceOffSave, similarityHeatmap } from "./rebrand.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -574,6 +574,11 @@ Deno.serve(async (req) => {
     if (body.action === "brief_from_web") {
       return json(await briefFromWeb({ supabase, gemini, geminiRaw, inlineImage, geminiKey, bucket: BUCKET }, body.brand ?? "", body.category ?? ""));
     }
+    const deps = { supabase, gemini, geminiRaw, inlineImage, geminiKey, bucket: BUCKET };
+    if (body.action === "face_off_setup" && body.rebrand_id) return json(await faceOffSetup(deps, body.rebrand_id, Number(body.n ?? 12)));
+    if (body.action === "face_off_eval" && body.rebrand_id) return json(await faceOffEval(deps, body.rebrand_id, Number(body.index ?? 0)));
+    if (body.action === "face_off_save" && body.rebrand_id) return json(await faceOffSave(deps, body.rebrand_id, body.answers ?? []));
+    if (body.action === "heatmap" && body.analysis_id) return json(await similarityHeatmap(deps, body.analysis_id));
     if (body.action === "rebrand_image" && body.rebrand_id) {
       return json(await rebrandImage({ supabase, gemini, inlineImage, geminiKey, bucket: BUCKET }, body.rebrand_id, Number(body.index ?? 0)));
     }

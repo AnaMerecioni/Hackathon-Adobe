@@ -286,3 +286,42 @@ ol.ranking li.orig { color: var(--muted); list-style: none; margin-left: -1.2rem
 
 .web-fill{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin:.4rem 0 .9rem}
 .rb-q input.from-web{background:#f3f8ff;border-color:#b9d3f5}
+
+.concept{position:relative;aspect-ratio:4/5;border-radius:12px 12px 0 0;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-start;padding:1.1rem 1rem}
+.concept .c-tag{font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;opacity:.75}
+.concept .c-head{font-size:1.45rem;line-height:1.1;font-weight:800;text-transform:uppercase;margin-top:.5rem;max-width:90%}
+.concept .c-line{display:block;width:3rem;height:4px;border-radius:2px;margin-top:.7rem}
+.concept .c-masc{position:absolute;right:6%;bottom:5%;width:46%}.concept .c-masc svg{width:100%;height:auto;filter:drop-shadow(0 6px 10px rgba(0,0,0,.25))}
+.fo{margin-top:1.4rem;padding:1.1rem;border:1px solid var(--line,#e5e2dc);border-radius:14px;background:#fbfaf7}
+.fo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.7rem;margin:.9rem 0}
+.fo-col{border:1px solid var(--line,#e5e2dc);border-radius:12px;padding:.7rem;background:#fff}.fo-col.best{border-color:#2e9e5b;box-shadow:0 0 0 2px rgba(46,158,91,.15)}
+.fo-name{font-weight:700;display:flex;align-items:center;gap:.4rem}.fo-name .dot{width:10px;height:10px;border-radius:50%}
+.fo-votes{font-size:.8rem;color:#666;margin:.15rem 0 .5rem}
+.fo-bar{display:grid;grid-template-columns:1fr 60px 28px;align-items:center;gap:.4rem;font-size:.75rem;margin:.25rem 0}
+.fo-bar i{display:block;height:6px;background:#eee;border-radius:3px;overflow:hidden}.fo-bar i b{display:block;height:100%;border-radius:3px}
+.fo-bar em{font-style:normal;text-align:right;color:#444}
+.personas{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.7rem;margin:.6rem 0}
+.persona{display:flex;gap:.7rem;padding:.7rem;border:1px solid var(--line,#e5e2dc);border-radius:12px;background:#fff}
+.p-av{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800}
+.p-quote{margin:.35rem 0;font-style:italic}
+
+.heat{margin:1rem 0;padding:1rem;border:1px solid var(--line,#e5e2dc);border-radius:14px}
+.heat-head{display:flex;justify-content:space-between;align-items:center;gap:1rem}.heat-head h3{margin:0}
+.heat-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1rem;margin-top:.8rem}
+@media (max-width:760px){.heat-body{grid-template-columns:1fr}}
+.heat-img{position:relative;line-height:0}.heat-img img{width:100%;border-radius:10px}
+.heat-img canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:multiply;border-radius:10px}
+.hz{position:absolute;border:2px dashed transparent;border-radius:6px;transition:.15s}.hz.on{border-color:#ff3b00;background:rgba(255,60,0,.08)}
+.heat-list{margin:0;padding-left:1.2rem;display:flex;flex-direction:column;gap:.5rem}
+.heat-list li{position:relative;padding:.4rem .5rem;border-radius:8px;cursor:default}.heat-list li.on{background:#fff2ea}
+.heat-list li b{display:block}.hbar{display:block;height:4px;border-radius:2px;margin-bottom:.3rem;background:linear-gradient(90deg,#ff3b00 var(--v),#eee var(--v))}
+.fo-sample{padding:.7rem .8rem;border-radius:10px;background:#fff;border:1px solid var(--line,#e5e2dc);margin:.6rem 0}
+.seg-row{display:flex;flex-wrap:wrap;gap:.3rem;margin:.4rem 0}
+.live-feed{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:.6rem;margin:.6rem 0}
+.live-p{display:flex;gap:.7rem;padding:.7rem;border:1px solid var(--line,#e5e2dc);border-radius:12px;background:#fff;transition:.2s}
+.live-p.waiting{opacity:.45}.live-p.talking{box-shadow:0 0 0 2px #2f6fdf33}
+.lp-av{flex:none;width:52px;height:52px;border-radius:50%;overflow:hidden}.lp-av svg{width:100%;height:100%}
+.lp-body{min-width:0}.lp-say .p-quote{margin:.35rem 0}.lp-tags{display:flex;flex-wrap:wrap;gap:.3rem}
+.typing{display:inline-flex;gap:3px;margin-top:.4rem}.typing i{width:6px;height:6px;border-radius:50%;background:#bbb;animation:tp 1s infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes tp{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
