@@ -472,7 +472,10 @@ async function finalize(analysisId: string) {
   const entropy = S.mean(baseVotes.map((x) => S.normEntropy(x.probabilities as Record<string, number>)));
   // Verificarea mascării: evaluatorii raportează textul lizibil care numește un brand
   const brandNames = brandsAll.map((b) => b.toLowerCase());
-  const leakVotes = baseVotes.filter((x) => (x.visible_text ?? []).some((t: string) => brandNames.some((b) => t.toLowerCase().includes(b))));
+  // Contează și producătorul / mențiunea legală (ex. „marcă înregistrată a Coca-Cola România SRL” trădează Dorna)
+  const PRODUCER = /marc[aă]\s+[îi]nregistrat|®|™|\b(s\.r\.l|srl|s\.a\.|ltd|gmbh|inc)|www\.|\.(ro|com|eu)\b|produs de|produc[aă]tor|distribuit de|[îi]mb[uo]teliat/i;
+  const isLeak = (t: string) => brandNames.some((b) => t.toLowerCase().includes(b)) || PRODUCER.test(t);
+  const leakVotes = baseVotes.filter((x) => (x.visible_text ?? []).some((t: string) => isLeak(String(t))));
   const leakTexts = [...new Set(baseVotes.flatMap((x) => x.visible_text ?? []))].slice(0, 5);
   const leakRate = baseVotes.length ? leakVotes.length / baseVotes.length : 0;
   // Câte reclame de memorie a avut fiecare brand (după excluderea duplicatelor reclamei testate)
